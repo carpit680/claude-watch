@@ -91,7 +91,7 @@ The app asks to send notifications on first launch **(user taps Allow)**.
 
 ## 4. Complications (user)
 
-Ask the user to edit their watch face and add **Claude sessions** and/or **Claude usage**.
+Ask the user to edit their watch face and add the **Sessions** and/or **Usage** complication.
 
 ## Done: what to tell the user
 
@@ -116,5 +116,7 @@ Ask the user to edit their watch face and add **Claude sessions** and/or **Claud
   - The project uses folder references, so new files are picked up automatically.
 - **Signing and relay settings:** these come from `ClaudeWatch/Base.xcconfig`, overridden by
   `Local.xcconfig`. Don't put team IDs or bundle IDs in `project.pbxproj`.
+- **Skill:** `skills/wrist-bridge/SKILL.md` is a standalone copy of these setup steps for people
+  without a clone. Keep it in step with this file and the bridge's commands.
 - **More:** architecture, the HTTP API and the relay protocol are in
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

@@ -68,6 +68,15 @@ Later: `wrist-bridge status`, `wrist-bridge pair`, `wrist-bridge unpair`, and
 **Using Claude Code?** Open this folder in Claude Code and say *"set this up for me"*.
 [AGENTS.md](AGENTS.md) has the steps for agents.
 
+Or install the [Wrist Bridge skill](skills/wrist-bridge/SKILL.md), so any Claude Code session can
+set it up, check it or fix it, without a copy of this repository:
+
+```bash
+mkdir -p ~/.claude/skills/wrist-bridge && curl -fsSL https://raw.githubusercontent.com/carpit680/claude-watch/main/skills/wrist-bridge/SKILL.md -o ~/.claude/skills/wrist-bridge/SKILL.md
+```
+
+Then ask Claude to *"set up Wrist Bridge"*.
+
 ## Using it
 
 - **Sessions list**: the bar beside each session shows its state: orange needs you, green busy,
