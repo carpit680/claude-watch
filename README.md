@@ -14,6 +14,8 @@ Control the [Claude Code](https://claude.com/claude-code) sessions on your Mac f
 
 > Unofficial. Not made or supported by Anthropic.
 
+<img src="docs/images/pairing.png" width="205" alt="Pairing screen on an Apple Watch: a 6-digit code pad">
+
 ## How it works
 
 ```

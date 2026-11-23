@@ -5,6 +5,7 @@ ClaudeWatch/Local.xcconfig
 
 # Build output and Xcode user state
 ClaudeWatch/build/
+ClaudeWatch/build-sim/
 build/
 DerivedData/
 xcuserdata/

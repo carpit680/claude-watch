@@ -9,8 +9,16 @@ struct ClaudeWatchApp: App {
 
     var body: some Scene {
         WindowGroup {
-            SessionsView()
-                .environmentObject(Router.shared)
+            #if DEBUG
+            // `-showPairing` opens the pairing screen directly, for screenshots in the simulator.
+            if ProcessInfo.processInfo.arguments.contains("-showPairing") {
+                NavigationStack { PairView() }
+            } else {
+                SessionsView().environmentObject(Router.shared)
+            }
+            #else
+            SessionsView().environmentObject(Router.shared)
+            #endif
         }
         // A question from a session, with its answers as buttons.
         WKNotificationScene(controller: NeedsYouNotificationController.self, category: Alerts.needsYou)
@@ -30,6 +38,9 @@ final class AppDelegate: NSObject, WKApplicationDelegate, UNUserNotificationCent
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.setNotificationCategories(Alerts.categories)
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-showPairing") { return } // screenshots: no permission prompt
+        #endif
         Task { @MainActor in
             let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
             if granted { WKApplication.shared().registerForRemoteNotifications() }
@@ -356,10 +367,12 @@ struct PairView: View {
                         } else if relay.isEmpty {
                             Text("Set a relay in Settings first.").foregroundStyle(.orange)
                         } else {
-                            Text("Code from claude-watch pair").foregroundStyle(.secondary)
+                            Text("Code from your Mac").foregroundStyle(.secondary)
                         }
                     }
                     .font(.caption2)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                     CodePad(code: $code, working: working) { Task { await join() } }
                 }
             }
