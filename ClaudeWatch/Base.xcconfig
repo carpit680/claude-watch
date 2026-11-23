@@ -11,4 +11,8 @@ DEVELOPMENT_TEAM =
 // $(BUNDLE_PREFIX).watchkitapp.widgets, and they share the app group group.$(BUNDLE_PREFIX).
 BUNDLE_PREFIX = com.example.claudewatch
 
+// The relay watches pair through, as a host name (xcconfig treats "//" as a comment, so no https://).
+// Empty: the watch asks for one when pairing.
+RELAY_HOST = claude-watch-relay.dataphy.ai
+
 #include? "Local.xcconfig"

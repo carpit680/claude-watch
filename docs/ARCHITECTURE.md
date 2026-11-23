@@ -4,8 +4,10 @@
 
 | Piece | Where | Role |
 | --- | --- | --- |
-| Bridge | `bridge/server.mjs`, installed copy in `~/.claude-watch/server.mjs` | HTTP API on 127.0.0.1:8787; reads transcripts, runs and relays messages, sends pushes |
-| Login agents | `~/Library/LaunchAgents/local.claudewatch.{bridge,tunnel}.plist` | Start the bridge and `cloudflared` at login, restart them if they exit |
+| Bridge | `bridge/server.mjs`, installed copy in `~/.claude-watch/server.mjs` | The watch API; reads transcripts, runs and relays messages, asks for pushes |
+| Relay | `relay/` (Cloudflare Worker) | Carries encrypted requests between watch and Mac; pairing codes; sends Apple pushes |
+| Login agents | `~/Library/LaunchAgents/local.claudewatch.{bridge,tunnel}.plist` | Start the bridge (and an optional tunnel) at login, restart them if they exit |
+| `claude-watch` command | `~/.claude-watch/bin/claude-watch`, linked onto the PATH | `pair`, `unpair`, `login`, … for the installed bridge |
 | Watch app | `ClaudeWatch/ClaudeWatch/` | Sessions list, session view, dictation, read-aloud, alert handling |
 | Complications | `ClaudeWatch/ClaudeWidgets/` | WidgetKit: "Claude sessions" and "Claude usage" |
 | Shared code | `ClaudeWatch/Shared/` | API client and models, used by both the app and the complications |
@@ -15,13 +17,41 @@ State on the Mac, all in `~/.claude-watch/` (mode 0700):
 
 | File | Holds |
 | --- | --- |
-| `token` | the pairing token |
-| `apns.json`, `apns.p8` | the Apple push key and its ids |
-| `devices.json` | push tokens: `app` (alerts) and `widgets` (complication reloads) |
+| `relay.json` | this Mac's relay account (id, secret) and its X25519 key pair |
+| `pairings.json` | watches paired through the relay, with their public keys |
+| `token` | the token for a direct connection |
+| `apns.json`, `apns.p8` | an Apple push key, for direct connections only |
+| `devices.json` | push tokens from directly connected watches |
 | `forks.json` | sessions copied for the watch (when `BRIDGE_LIVE_MODE=copy`) |
 | `summaries.json` | cached transcript summaries, so a restarted bridge answers at once |
 | `workspace/` | where new sessions from the watch run |
 | `logs/` | bridge and tunnel output |
+
+## The relay and pairing
+
+```
+watch                         relay                              Mac (bridge)
+  │                             │◀──── WebSocket, hello(secret) ────│
+  │                             │◀── POST pairing {pk_mac} ─────────│  claude-watch pair
+  │                             │──── code 123 456 ────────────────▶│  shows the code
+  │── POST join {code, pk_w} ──▶│                                   │
+  │◀── watchId, secret, pk_mac ─│──── joined {pk_w} ───────────────▶│
+  │  shows check(pk_mac, pk_w)  │                                   │  shows check(pk_mac, pk_w)
+  │                             │◀── confirm (you typed y) ─────────│
+  │── rpc {box} ───────────────▶│──── rpc {box} ───────────────────▶│  opens, runs the API call,
+  │◀── {box} ───────────────────│◀─── rpc-reply {box} ──────────────│  seals the answer
+```
+
+- **Key:** `HKDF-SHA256(X25519(own private, peer public), salt = pk_mac ‖ pk_w,
+  info = "claude-watch v1")`, giving 32 bytes.
+- **Box:** ChaCha20-Poly1305, laid out as `nonce(12) ‖ ciphertext ‖ tag(16)`, base64. The AAD is
+  the watch id. Inside is `{method, path, body}` going in and `{status, body}` coming back: the
+  same API as the local HTTP one.
+- **Check number:** `SHA-256("claude-watch check" ‖ pk_mac ‖ pk_w)`. Take the first 4 bytes as a
+  big-endian integer, mod 1 000 000.
+- **Pushes:** the bridge sends `{type: "push", kind, payload}` over its WebSocket. The relay sends
+  that to every confirmed watch's push tokens, with its own Apple key. Once any watch is paired
+  through the relay, the bridge stops sending pushes directly.
 
 ## Reading sessions
 
@@ -84,9 +114,10 @@ Usage limits come from the `rate_limit_event` that `claude -p --output-format st
 reports. The bridge makes a tiny request for it at most every 10 minutes, and only while the watch
 asks for `/status`.
 
-## HTTP API
+## Bridge API
 
-Every request needs `Authorization: Bearer <token>`.
+The same calls arrive two ways: inside relay boxes from paired watches, or over local HTTP with
+`Authorization: Bearer <token>` (a direct connection through your own tunnel).
 
 | Method and path | Returns |
 | --- | --- |
@@ -97,4 +128,4 @@ Every request needs `Authorization: Bearer <token>`.
 | `POST /sessions/:id/stop` | stops a headless run (not a relay) |
 | `GET /status` | `{needsYou, working, idle, top, usage}` for the watch face |
 | `POST /devices` `{token, sandbox, kind}` | registers a push token (`kind`: `app` or `widgets`) |
-| `POST /token/rotate` | `{token}`: a new pairing token; the old one stops working |
+| `POST /token/rotate` | `{token}`: a new direct-connection token (not over the relay) |

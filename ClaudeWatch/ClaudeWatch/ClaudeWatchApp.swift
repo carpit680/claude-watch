@@ -89,7 +89,14 @@ struct SessionsView: View {
                 }
                 .listItemTint(.blue)
 
-                if let error {
+                if !Bridge.isConfigured {
+                    NavigationLink {
+                        PairView()
+                    } label: {
+                        Label("Pair with your Mac", systemImage: "link")
+                    }
+                    .listItemTint(.orange)
+                } else if let error {
                     Text(error).font(.footnote).foregroundStyle(.red)
                 }
 
@@ -236,56 +243,213 @@ struct UsageRow: View {
 }
 
 struct SettingsView: View {
+    @AppStorage("relayURL", store: Bridge.shared) private var relayURL = ""
     @AppStorage("baseURL", store: Bridge.shared) private var baseURL = ""
     @AppStorage("token", store: Bridge.shared) private var token = ""
+    @State private var pairing = Relay.pairing
+    @State private var confirmUnpair = false
     @State private var confirmRotate = false
-    @State private var rotating = false
     @State private var note: String?
 
     var body: some View {
         Form {
-            Section("Bridge address") {
-                TextField(BakedConfig.baseURL.isEmpty ? "https://…" : BakedConfig.baseURL, text: $baseURL)
+            Section {
+                if let pairing, pairing.confirmed {
+                    LabeledContent("Paired with", value: pairing.macName)
+                    Button("Unpair", role: .destructive) { confirmUnpair = true }
+                } else {
+                    NavigationLink("Pair with your Mac") { PairView() }
+                }
+                TextField(Relay.defaultURL.isEmpty ? "Relay https://…" : Relay.defaultURL, text: $relayURL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-            }
-            Section("Token") {
-                SecureField(BakedConfig.token.isEmpty ? "Pairing token" : "Built in", text: $token)
-            }
-            Section {
-                Text("Leave both empty to use the values built into the app.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+            } footer: {
+                Text("Pairing goes through the relay above, encrypted end to end between this watch and your Mac. Change it only if you run your own.")
             }
+
             Section {
-                Button(rotating ? "Changing…" : "New pairing token") { confirmRotate = true }
-                    .disabled(rotating)
+                TextField("https://…", text: $baseURL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                SecureField("Pairing token", text: $token)
+                if Bridge.usesDirect {
+                    Button("New pairing token") { confirmRotate = true }
+                }
                 if let note {
                     Text(note).font(.footnote).foregroundStyle(.secondary)
                 }
+            } header: {
+                Text("Direct connection")
             } footer: {
-                Text("Use this if the token may have leaked. The old one stops working at once; this watch keeps working.")
+                Text("Only if you run your own tunnel instead of pairing. Used while this watch isn't paired.")
             }
         }
         .navigationTitle("Settings")
+        .onAppear { pairing = Relay.pairing }
+        .confirmationDialog("Unpair from \(pairing?.macName ?? "your Mac")?", isPresented: $confirmUnpair) {
+            Button("Unpair", role: .destructive) {
+                Task {
+                    await Relay.unpair()
+                    pairing = nil
+                    WidgetCenter.shared.reloadAllTimelines()
+                }
+            }
+        }
         .confirmationDialog("Change the pairing token?", isPresented: $confirmRotate) {
             Button("Change token", role: .destructive) { Task { await rotate() } }
         } message: {
-            Text("Anything else using the old token loses access. If you reinstall the app, run configure on your Mac first.")
+            Text("Anything else using the old token loses access.")
         }
     }
 
     private func rotate() async {
-        rotating = true
-        defer { rotating = false }
         do {
             try await Bridge.rotateToken()
-            WidgetCenter.shared.reloadAllTimelines()
             note = "Done. The old token no longer works."
             WKInterfaceDevice.current().play(.success)
         } catch {
             note = error.localizedDescription
             WKInterfaceDevice.current().play(.failure)
         }
+    }
+}
+
+/// Pairs this watch with a Mac: enter the code the Mac shows, compare check numbers, confirm on the Mac.
+struct PairView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("relayURL", store: Bridge.shared) private var relayURL = ""
+    @State private var code = ""
+    @State private var check: String?
+    @State private var working = false
+    @State private var error: String?
+    @State private var paired = false
+
+    private var relay: String { relayURL.isEmpty ? Relay.defaultURL : relayURL }
+
+    var body: some View {
+        Group {
+            if paired {
+                VStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill").font(.largeTitle).foregroundStyle(.green)
+                    Text("Paired").font(.headline)
+                }
+            } else if let check {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Check number").font(.caption).foregroundStyle(.secondary)
+                        Text(check)
+                            .font(.system(size: 30, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                        Text("If your Mac shows the same number, type y there and press Return.")
+                            .font(.footnote)
+                        ProgressView()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                // Entering the code: the pad fills the screen, nothing to scroll.
+                VStack(spacing: 3) {
+                    Group {
+                        if let error {
+                            Text(error).foregroundStyle(.red).lineLimit(2).minimumScaleFactor(0.7)
+                        } else if relay.isEmpty {
+                            Text("Set a relay in Settings first.").foregroundStyle(.orange)
+                        } else {
+                            Text("Code from claude-watch pair").foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.caption2)
+                    CodePad(code: $code, working: working) { Task { await join() } }
+                }
+            }
+        }
+        .navigationTitle("Pair")
+        .task(id: check) {
+            // Wait for the person to confirm on the Mac.
+            guard check != nil else { return }
+            while !Task.isCancelled && !paired {
+                if let status = try? await Relay.status(), status.confirmed {
+                    paired = true
+                    WKInterfaceDevice.current().play(.success)
+                    await Bridge.reregisterDevices()
+                    WidgetCenter.shared.reloadAllTimelines()
+                    try? await Task.sleep(for: .seconds(1.5))
+                    dismiss()
+                    return
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    private func join() async {
+        guard code.count == 6, !relay.isEmpty, !working else { return }
+        working = true
+        defer { working = false }
+        error = nil
+        do {
+            check = try await Relay.join(code: code, relayURL: relay.trimmingCharacters(in: .whitespaces))
+        } catch {
+            code = ""
+            self.error = error.localizedDescription
+            WKInterfaceDevice.current().play(.failure)
+        }
+    }
+}
+
+/// Six digits on a compact number pad that fits the screen. Sends the code once the sixth is in.
+struct CodePad: View {
+    @Binding var code: String
+    let working: Bool
+    let done: () -> Void
+
+    private let rows = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["", "0", "⌫"]]
+
+    var body: some View {
+        VStack(spacing: 3) {
+            ZStack {
+                Text(code.isEmpty ? "––– –––" : formatted)
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .opacity(working ? 0.3 : 1)
+                if working { ProgressView().scaleEffect(0.6) }
+            }
+            .frame(height: 24)
+            ForEach(rows, id: \.self) { row in
+                HStack(spacing: 3) {
+                    ForEach(row, id: \.self) { key in
+                        if key.isEmpty {
+                            Color.clear
+                        } else {
+                            Button { press(key) } label: {
+                                Text(key)
+                                    .font(.system(size: 17, weight: .medium, design: .rounded))
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 7))
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+        .disabled(working)
+    }
+
+    private var formatted: String {
+        code.count > 3 ? "\(code.prefix(3)) \(code.dropFirst(3))" : code
+    }
+
+    private func press(_ key: String) {
+        WKInterfaceDevice.current().play(.click)
+        if key == "⌫" {
+            if !code.isEmpty { code.removeLast() }
+            return
+        }
+        guard code.count < 6 else { return }
+        code += key
+        if code.count == 6 { done() }
     }
 }

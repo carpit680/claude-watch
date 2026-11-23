@@ -1,5 +1,6 @@
 #!/bin/zsh
-# Runs the bridge and the Cloudflare tunnel at login, and restarts them if they exit.
+# Runs the bridge at login, and restarts it if it exits. Also runs your Cloudflare tunnel, if you
+# set one up for a direct connection (the relay doesn't need one).
 # Copies the bridge to ~/.claude-watch so it keeps working wherever this project lives.
 # Re-run after editing server.mjs. Remove with: bridge/install-agents.sh uninstall
 set -euo pipefail
@@ -22,12 +23,15 @@ done
 
 if [[ "${1:-}" == "uninstall" ]]; then
   for label in $LABELS; do rm -f "$AGENTS/$label.plist"; done
-  echo "Removed login agents."
+  for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
+    [[ -L "$dir/claude-watch" ]] && rm -f "$dir/claude-watch"
+  done
+  echo "Removed login agents and the claude-watch command. Your settings stay in $DEST."
   exit 0
 fi
 
 NODE="$(command -v node)"
-CLOUDFLARED="$(command -v cloudflared)"
+CLOUDFLARED="$(command -v cloudflared || true)"
 mkdir -p "$DEST/logs" "$AGENTS"
 cp "$HERE/server.mjs" "$DEST/server.mjs"
 
@@ -59,9 +63,26 @@ $args  </array>
 }
 
 write_plist local.claudewatch.bridge bridge "$NODE" "$DEST/server.mjs"
-write_plist local.claudewatch.tunnel tunnel "$CLOUDFLARED" tunnel --no-autoupdate run --url http://localhost:8787 "$TUNNEL"
+STARTED=(local.claudewatch.bridge)
+if [[ -n "$CLOUDFLARED" ]] && "$CLOUDFLARED" tunnel list 2>/dev/null | awk '{print $2}' | grep -qx "$TUNNEL"; then
+  write_plist local.claudewatch.tunnel tunnel "$CLOUDFLARED" tunnel --no-autoupdate run --url http://localhost:8787 "$TUNNEL"
+  STARTED+=(local.claudewatch.tunnel)
+else
+  rm -f "$AGENTS/local.claudewatch.tunnel.plist"
+fi
 
-for label in $LABELS; do
+for label in $STARTED; do
   launchctl bootstrap "$DOMAIN" "$AGENTS/$label.plist"
 done
-echo "Installed. Logs are in $DEST/logs."
+
+# A `claude-watch` command: claude-watch pair, claude-watch unpair, …
+mkdir -p "$DEST/bin"
+printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$NODE" "$DEST/server.mjs" > "$DEST/bin/claude-watch"
+chmod +x "$DEST/bin/claude-watch"
+COMMAND="$DEST/bin/claude-watch"
+for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
+  if [[ -d "$dir" && -w "$dir" ]]; then ln -sf "$DEST/bin/claude-watch" "$dir/claude-watch"; COMMAND=claude-watch; break; fi
+done
+
+echo "Installed: ${STARTED[*]}. Logs are in $DEST/logs."
+echo "Pair your watch with: $COMMAND pair"

@@ -12,3 +12,8 @@ xcuserdata/
 
 .DS_Store
 node_modules/
+
+# Wrangler state
+relay/.wrangler/
+relay/.dev.vars
+relay/.wrangler.deploy.toml

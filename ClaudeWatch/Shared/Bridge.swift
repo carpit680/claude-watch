@@ -121,9 +121,11 @@ enum Bridge {
         return "group." + id
     }
 
-    static var baseURL: String { setting("baseURL") ?? BakedConfig.baseURL }
-    static var token: String { setting("token") ?? BakedConfig.token }
-    static var isConfigured: Bool { !baseURL.isEmpty && !token.isEmpty }
+    // A direct address and token, for running without the relay (Settings → Direct connection).
+    static var baseURL: String { setting("baseURL") ?? "" }
+    static var token: String { setting("token") ?? "" }
+    static var usesDirect: Bool { !Relay.isPaired && !baseURL.isEmpty && !token.isEmpty }
+    static var isConfigured: Bool { Relay.isPaired || usesDirect }
 
     private static func setting(_ key: String) -> String? {
         let value = (shared.string(forKey: key) ?? UserDefaults.standard.string(forKey: key))?
@@ -176,10 +178,23 @@ enum Bridge {
     private struct Registered: Codable { let ok: Bool; let push: Bool }
 
     /// Tells the bridge where to send pushes: "app" for alerts, "widgets" for watch face reloads.
-    @discardableResult
-    static func registerDevice(_ token: String, sandbox: Bool, kind: String = "app") async throws -> Bool {
-        let registered: Registered = try await request("POST", "/devices", body: ["token": token, "sandbox": sandbox, "kind": kind])
-        return registered.push
+    static func registerDevice(_ token: String, sandbox: Bool, kind: String = "app") async throws {
+        // Remembered, so they can be sent again after pairing.
+        shared.set(token, forKey: "pushToken.\(kind)")
+        if Relay.isPaired {
+            try await Relay.registerDevice(token, sandbox: sandbox, kind: kind)
+        } else if usesDirect {
+            let _: Registered = try await request("POST", "/devices", body: ["token": token, "sandbox": sandbox, "kind": kind])
+        }
+    }
+
+    /// Sends the push tokens this watch already has to wherever alerts now come from.
+    static func reregisterDevices() async {
+        for kind in ["app", "widgets"] {
+            if let token = shared.string(forKey: "pushToken.\(kind)") {
+                try? await registerDevice(token, sandbox: pushSandbox, kind: kind)
+            }
+        }
     }
 
     /// Replaces the pairing token. The old one, including the one built into the app, stops working.
@@ -202,8 +217,15 @@ enum Bridge {
     }
 
     private static func request<T: Decodable>(_ method: String, _ path: String, body: [String: Any]?) async throws -> T {
-        guard isConfigured, let url = URL(string: baseURL + path) else {
-            throw BridgeError(message: "Set the bridge address and token in Settings.")
+        if Relay.isPaired {
+            let (status, data) = try await Relay.call(method, path, body: body)
+            guard (200..<300).contains(status) else {
+                throw BridgeError(message: (try? JSONDecoder().decode(Failure.self, from: data))?.error ?? "Your Mac returned \(status)")
+            }
+            return try JSONDecoder().decode(T.self, from: data)
+        }
+        guard usesDirect, let url = URL(string: baseURL + path) else {
+            throw BridgeError(message: "Pair with your Mac in Settings.")
         }
         var req = URLRequest(url: url, timeoutInterval: 20)
         req.httpMethod = method

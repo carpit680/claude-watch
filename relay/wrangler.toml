@@ -1,0 +1,22 @@
+# Claude Watch relay. Deploy with `npx wrangler deploy` from this folder.
+# Push secrets (set with `npx wrangler secret put <NAME>`):
+#   APNS_KEY      contents of your AuthKey_XXXXXXXXXX.p8
+#   APNS_KEY_ID   the key's 10-character id
+#   APNS_TEAM_ID  your Apple team id
+#   APNS_TOPIC    the watch app's bundle id, e.g. com.you.claudewatch.watchkitapp
+name = "claude-watch-relay"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "MACS"
+class_name = "MacHub"
+
+[[durable_objects.bindings]]
+name = "CODES"
+class_name = "PairingCodes"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MacHub", "PairingCodes"]

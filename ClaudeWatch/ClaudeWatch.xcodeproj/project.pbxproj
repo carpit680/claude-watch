@@ -54,10 +54,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		C1A000000000000000000110 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		C1A000000000000000000004 /* WristBridge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WristBridge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1A0000000000000000000A1 /* ClaudeWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClaudeWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1A000000000000000000102 /* ClaudeWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ClaudeWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C1A000000000000000000110 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -152,9 +152,9 @@
 				C1A00000000000000000010C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				C1A000000000000000000110 /* Base.xcconfig */,
 				C1A0000000000000000000B1 /* ClaudeWatch */,
 				C1A000000000000000000106 /* Shared */,
+				C1A000000000000000000110 /* Base.xcconfig */,
 			);
 			name = ClaudeWatch;
 			productName = ClaudeWatch;
@@ -408,6 +408,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Claude;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
@@ -438,6 +439,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Claude;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
@@ -462,10 +464,10 @@
 		C1A00000000000000000010E /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
-				CODE_SIGN_ENTITLEMENTS = Widgets.entitlements;
 				INFOPLIST_FILE = "ClaudeWidgets-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Claude;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -488,10 +490,10 @@
 		C1A00000000000000000010F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
-				CODE_SIGN_ENTITLEMENTS = Widgets.entitlements;
 				INFOPLIST_FILE = "ClaudeWidgets-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Claude;
 				LD_RUNPATH_SEARCH_PATHS = (

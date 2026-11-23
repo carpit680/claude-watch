@@ -126,8 +126,10 @@ struct SessionView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 2)
             }
-            .onChange(of: detail?.turns) { _, _ in showLatest(proxy) }
-            .onChange(of: running) { _, _ in showLatest(proxy) }
+            // Opens at the latest message, not the oldest.
+            .defaultScrollAnchor(.bottom)
+            .onChange(of: detail?.turns) { old, _ in showLatest(proxy, animated: old != nil) }
+            .onChange(of: running) { _, _ in showLatest(proxy, animated: true) }
         }
         }
         .navigationTitle(detail?.project ?? "Session")
@@ -210,12 +212,16 @@ struct SessionView: View {
         .background(color.opacity(0.2), in: RoundedRectangle(cornerRadius: 9))
     }
 
-    private func showLatest(_ proxy: ScrollViewProxy) {
-        withAnimation {
-            if running {
-                proxy.scrollTo("working", anchor: .bottom)
-            } else if !turns.isEmpty {
-                proxy.scrollTo(turns.count - 1, anchor: .top)
+    /// Brings the newest message into view: its start, so a long reply reads from the top.
+    private func showLatest(_ proxy: ScrollViewProxy, animated: Bool) {
+        // After this layout pass, so the new message has a position to scroll to.
+        DispatchQueue.main.async {
+            withAnimation(animated ? .default : nil) {
+                if running {
+                    proxy.scrollTo("working", anchor: .bottom)
+                } else if !turns.isEmpty {
+                    proxy.scrollTo(turns.count - 1, anchor: .top)
+                }
             }
         }
     }

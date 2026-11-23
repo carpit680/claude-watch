@@ -1,81 +1,54 @@
 # Setting up Claude Watch: instructions for coding agents
 
-You are helping a user install Claude Watch: a bridge on their Mac, and a watchOS app that talks
-to it. Work from the repository root. Do every step you can yourself. Stop and ask the user only
-for the steps marked **(user)**: sign-ins, passwords, purchases, and taps on the watch. Never type
-their passwords or handle their Apple or Cloudflare credentials.
+You are helping a user install Claude Watch: a bridge on their Mac, and a watchOS app that pairs
+with it through a relay. Work from the repository root. Do every step you can yourself. Stop and
+ask the user only for the steps marked **(user)**: sign-ins, passwords, and taps on the watch.
+Never type their passwords or handle their Apple or Claude credentials.
 
 Check each step's result before moving on. If a check fails, use the README's Troubleshooting
 table before asking the user.
 
-## 0. Gather what you need
-
-Ask the user, in one question, for:
-
-- a hostname on a domain in their Cloudflare account, for the bridge (e.g. `watch.example.com`);
-- a reverse-DNS bundle prefix they own (suggest `com.<their-name>.claudewatch`).
-
-Find their Apple team ID yourself where you can. With Xcode signed in, `security find-identity -v
--p codesigning` shows `Apple Development: … (TEAMID)`. Otherwise ask them to read it from
-developer.apple.com → Membership.
-
-Check the tools:
+## 0. Check the tools
 
 ```bash
-node --version          # 18 or later
-xcodebuild -version     # Xcode 26 or later
-command -v cloudflared || brew install cloudflared
+node --version          # 22 or later (the bridge uses Node's built-in WebSocket)
 ```
 
-If `xcodebuild` says the developer directory is the Command Line Tools, prefix the commands with
-`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` instead of changing it system-wide.
-
-## 1. Sign the bridge's claude in (user)
+## 1. Install the bridge
 
 ```bash
-node bridge/server.mjs login
+bridge/install-agents.sh
+```
+
+It prints the command to use for the next steps: `claude-watch`, or a full path if no folder on
+the PATH was writable. Check that it's running:
+
+```bash
+grep "relay\|listening" ~/.claude-watch/logs/bridge.log | tail -3
+```
+
+## 2. Sign the bridge in to Claude (user)
+
+```bash
+claude-watch login
 ```
 
 This opens a browser sign-in. Run it in a terminal the user can see, and wait for them to finish.
 
-## 2. Tunnel
+## 3. Get the app on the watch
+
+If the app is installed from the App Store or TestFlight, skip to step 4. Otherwise build it:
+
+- Find the Apple team ID yourself where you can: with Xcode signed in,
+  `security find-identity -v -p codesigning` shows `Apple Development: … (TEAMID)`. Otherwise
+  ask the user (developer.apple.com → Membership).
+- Ask the user for a bundle prefix they own, and suggest `com.<their-name>.claudewatch`.
 
 ```bash
-cloudflared tunnel login                                  # (user) picks their domain in the browser
-cloudflared tunnel create claude-watch
-cloudflared tunnel route dns claude-watch <hostname>
+node bridge/server.mjs configure --team <TEAM_ID> --bundle-prefix <prefix>
 ```
 
-`cloudflared tunnel login` can time out. Run it again if it does.
-
-## 3. Bridge and tunnel at login
-
-```bash
-bridge/install-agents.sh
-curl -s -o /dev/null -w "%{http_code}\n" https://<hostname>/status   # expect 401 (no token): reachable
-```
-
-## 4. Configure the app
-
-```bash
-node bridge/server.mjs configure https://<hostname> --team <TEAM_ID> --bundle-prefix <prefix>
-```
-
-Never commit `ClaudeWatch/Shared/Config.generated.swift` (it holds the token) or
-`ClaudeWatch/Local.xcconfig`.
-
-## 5. Push key (user, then you)
-
-The user creates a key on developer.apple.com → Certificates, Identifiers & Profiles → Keys,
-ticks Apple Push Notifications service, and downloads `AuthKey_XXXXXXXXXX.p8`. Then you run:
-
-```bash
-node bridge/server.mjs push
-```
-
-## 6. Build and install
-
-The user must be signed in to Xcode (Settings → Apple Accounts) **(user)**, and their watch must
+The user must be signed in to Xcode (Settings → Apple Accounts) **(user)**, and the watch must
 have Developer Mode on and be paired with this Mac in Xcode's Devices window **(user)**.
 
 ```bash
@@ -90,41 +63,59 @@ xcrun devicectl device process launch --device <watch-id> <prefix>.watchkitapp
 
 Notes:
 
-- "No Accounts" from `xcodebuild` means Xcode isn't signed in. Ask the user to sign in, then quit
-  and reopen Xcode.
-- An install can fail with "device disconnected", or with error 3002 while the watch is asleep.
-  Ask the user to wake the watch, then retry.
-- If the install says the widget's profile "cannot be installed on this device", move the stale
+- If `xcodebuild` says the developer directory is the Command Line Tools, prefix the commands
+  with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
+- "No Accounts" means Xcode isn't signed in. Ask the user to sign in, then quit and reopen Xcode.
+- An install can fail with "device disconnected" or error 3002 while the watch is asleep. Ask the
+  user to wake it, then retry.
+- If the widget's profile "cannot be installed on this device", move the stale
   `iOS Team Provisioning Profile: *` out of
   `~/Library/Developer/Xcode/UserData/Provisioning Profiles`, then build again.
+- A build with the user's own bundle ID gets no alerts from the shared relay. Tell them; the fix
+  is their own relay ([relay/README.md](relay/README.md)).
 
-The app asks to send notifications on first launch **(user taps Allow)**. Then check:
+## 4. Pair (user and you)
+
+Start `claude-watch pair` in a terminal the user can see. It prints a 6-digit code. Tell the user:
+
+1. On the watch, open the app, tap **Pair with your Mac**, and enter the code.
+2. The watch then shows a check number. If the Mac asks about the same number, type `y` in the
+   terminal and press Return.
+
+The code expires after 10 minutes. If it does, run `pair` again. Check the result:
 
 ```bash
-cat ~/.claude-watch/devices.json   # should list a device with "kind": "app"
+cat ~/.claude-watch/pairings.json   # one entry per paired watch
 ```
 
-## 7. Complications (user)
+The app asks to send notifications on first launch **(user taps Allow)**.
 
-Ask the user to edit their watch face and add **Claude sessions** and/or **Claude usage**. Once
-one is on the face, `devices.json` also gains a `"kind": "widgets"` entry.
+## 5. Complications (user)
+
+Ask the user to edit their watch face and add **Claude sessions** and/or **Claude usage**.
 
 ## Done: what to tell the user
 
 - The bar colors: orange needs you, green busy, blue open on the Mac, gray idle.
-- Alerts arrive when a session asks something, shows a permission prompt (answerable only on the
-  Mac), or finishes a long task.
+- Alerts arrive when a session asks something (its answers are buttons on the alert), shows a
+  permission prompt (answerable only on the Mac), or finishes a long task.
 - *"Tell <project> …"* on New session messages that session.
 - Keep the Mac plugged in, or it may sleep and the watch can't reach it.
 
 ## Working on the code
 
-- Bridge: `bridge/server.mjs`, a single file with no dependencies. Check syntax with
-  `node --check bridge/server.mjs`, then run `bridge/install-agents.sh` to restart the installed
-  copy. `node bridge/server.mjs route "<text>"` tests spoken routing without sending anything.
-- App: `ClaudeWatch/` has three source folders. `ClaudeWatch/` is the app, `ClaudeWidgets/` the
-  complications, and `Shared/` holds code both use. The Xcode project uses folder references, so
-  new files are picked up automatically.
-- Signing values come from `ClaudeWatch/Base.xcconfig`, overridden by `Local.xcconfig`. Don't put
-  team IDs or bundle IDs in `project.pbxproj`.
-- Architecture and the HTTP API: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- **Bridge:** `bridge/server.mjs`, one file, no dependencies.
+  - Check syntax with `node --check bridge/server.mjs`, then run `bridge/install-agents.sh` to
+    restart the installed copy.
+  - `node bridge/server.mjs route "<text>"` tests spoken routing without sending anything.
+- **Relay:** `relay/src/index.js`.
+  - Test locally with `npx wrangler dev` from `relay/`; see [relay/README.md](relay/README.md).
+  - The encryption must match `ClaudeWatch/Shared/Relay.swift` and the relay section of
+    `server.mjs` exactly.
+- **App:** `ClaudeWatch/` has three source folders.
+  - `ClaudeWatch/` is the app, `ClaudeWidgets/` the complications, and `Shared/` the code both use.
+  - The project uses folder references, so new files are picked up automatically.
+- **Signing and relay settings:** these come from `ClaudeWatch/Base.xcconfig`, overridden by
+  `Local.xcconfig`. Don't put team IDs or bundle IDs in `project.pbxproj`.
+- **More:** architecture, the HTTP API and the relay protocol are in
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

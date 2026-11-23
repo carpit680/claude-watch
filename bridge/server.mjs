@@ -4,9 +4,11 @@
 //
 //   node bridge/server.mjs                    start the bridge on 127.0.0.1
 //   node bridge/server.mjs login              sign the bridge's claude in (once)
-//   node bridge/server.mjs configure <url> [--team <TEAM_ID>] [--bundle-prefix <com.you.claudewatch>]
-//                                             write the watch app's address, token and signing settings
+//   node bridge/server.mjs configure --team <TEAM_ID> --bundle-prefix <com.you.claudewatch> [--relay <host>]
+//                                             signing settings for building the app yourself
 //   node bridge/server.mjs push [AuthKey.p8]  store an Apple push key (default: newest in ~/Downloads)
+//   node bridge/server.mjs pair [--relay <url>]  pair a watch through the relay (no tunnel needed)
+//   node bridge/server.mjs unpair             forget the watches paired through the relay
 //   node bridge/server.mjs route "<text>"     show which session a dictated message would go to
 //
 // Environment:
@@ -24,7 +26,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HOME = os.homedir();
@@ -36,6 +38,10 @@ const FORKS_FILE = path.join(CONF_DIR, 'forks.json');
 const APNS_FILE = path.join(CONF_DIR, 'apns.json'); // Apple push key details, written by `push`
 const APNS_KEY_FILE = path.join(CONF_DIR, 'apns.p8');
 const DEVICES_FILE = path.join(CONF_DIR, 'devices.json'); // watches that asked for notifications
+const RELAY_FILE = path.join(CONF_DIR, 'relay.json'); // this Mac's relay account and key pair
+const PAIRINGS_FILE = path.join(CONF_DIR, 'pairings.json'); // watches paired through the relay
+// The relay a new pairing uses, unless `pair --relay <url>` or BRIDGE_RELAY says otherwise.
+const DEFAULT_RELAY = process.env.BRIDGE_RELAY || 'https://claude-watch-relay.dataphy.ai';
 const RECENT_MS = 24 * 60 * 60 * 1000; // sessions older than this are left out of the watch face counts
 const USAGE_TTL_MS = 10 * 60 * 1000;
 const WATCH_INTERVAL_MS = 3000; // how often to look for a session that started waiting on the user
@@ -594,6 +600,12 @@ function loadReason(body) {
 }
 
 async function pushAll(kind, payload, label, collapseId) {
+  // Watches paired through the relay get their pushes from it, and only from it: once a watch is
+  // paired, the direct pushes below would reach it a second time.
+  if (Object.keys(loadJson(PAIRINGS_FILE, {})).length) {
+    if (relay.ready) relay.socket.send(JSON.stringify({ type: 'push', kind, payload, collapseId }));
+    return;
+  }
   const cfg = loadJson(APNS_FILE, null);
   const devices = loadJson(DEVICES_FILE, []).filter((d) => (d.kind || 'app') === (kind === 'widgets' ? 'widgets' : 'app'));
   if (!cfg || !devices.length) return;
@@ -673,6 +685,195 @@ function watchSessions() {
   if (primed && signature !== faceSignature) pushAll('widgets', { aps: { 'content-changed': true } }, 'face').catch(() => {});
   faceSignature = signature;
   primed = true;
+}
+
+
+// ---------- relay ----------
+//
+// With a relay, the watch needs no tunnel or domain: this bridge keeps a WebSocket open to it,
+// and a paired watch's requests arrive over that socket. They are encrypted end to end with a
+// key the watch and this Mac agreed on when pairing (X25519, HKDF-SHA256, ChaCha20-Poly1305);
+// the relay only passes the boxes along.
+
+const KDF_INFO = Buffer.from('claude-watch v1');
+const b64u = (text) => Buffer.from(text, 'base64url');
+
+function newKeyPair() {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('x25519');
+  return {
+    privateKey: privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64'),
+    publicKey: publicKey.export({ format: 'jwk' }).x, // 32 bytes, base64url
+  };
+}
+
+// The key shared with one watch. Both sides derive the same one from their own private key and
+// the other's public key; the salt ties it to this exact pair of keys.
+function sharedKey(privateKeyB64, peerPublic, macPublic, watchPublic) {
+  const secret = crypto.diffieHellman({
+    privateKey: crypto.createPrivateKey({ key: Buffer.from(privateKeyB64, 'base64'), format: 'der', type: 'pkcs8' }),
+    publicKey: crypto.createPublicKey({ key: { kty: 'OKP', crv: 'X25519', x: peerPublic }, format: 'jwk' }),
+  });
+  return Buffer.from(crypto.hkdfSync('sha256', secret, Buffer.concat([b64u(macPublic), b64u(watchPublic)]), KDF_INFO, 32));
+}
+
+// nonce (12) | ciphertext | tag (16), base64: the same layout as CryptoKit's ChaChaPoly.SealedBox.
+function seal(key, value, aad) {
+  const nonce = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('chacha20-poly1305', key, nonce, { authTagLength: 16 });
+  cipher.setAAD(Buffer.from(aad));
+  const data = Buffer.concat([cipher.update(JSON.stringify(value)), cipher.final()]);
+  return Buffer.concat([nonce, data, cipher.getAuthTag()]).toString('base64');
+}
+
+function unseal(key, box, aad) {
+  const buf = Buffer.from(box, 'base64');
+  const decipher = crypto.createDecipheriv('chacha20-poly1305', key, buf.subarray(0, 12), { authTagLength: 16 });
+  decipher.setAAD(Buffer.from(aad));
+  decipher.setAuthTag(buf.subarray(buf.length - 16));
+  return JSON.parse(Buffer.concat([decipher.update(buf.subarray(12, buf.length - 16)), decipher.final()]).toString('utf8'));
+}
+
+// Six digits both the watch and the Mac show while pairing. If they match, no one in between
+// swapped the keys.
+function checkNumber(macPublic, watchPublic) {
+  const digest = crypto.createHash('sha256').update('claude-watch check').update(b64u(macPublic)).update(b64u(watchPublic)).digest();
+  const n = String(digest.readUInt32BE(0) % 1_000_000).padStart(6, '0');
+  return `${n.slice(0, 3)} ${n.slice(3)}`;
+}
+
+const relay = { socket: null, ready: false, backoff: 1000, keys: new Map() };
+
+function keyFor(cfg, watchId) {
+  const pairing = loadJson(PAIRINGS_FILE, {})[watchId];
+  if (!pairing) return null;
+  const cached = relay.keys.get(watchId);
+  if (cached?.pk === pairing.pk) return cached.key;
+  const key = sharedKey(cfg.privateKey, pairing.pk, cfg.publicKey, pairing.pk);
+  relay.keys.set(watchId, { pk: pairing.pk, key });
+  return key;
+}
+
+function connectRelay() {
+  const cfg = loadJson(RELAY_FILE, null);
+  if (!cfg || relay.socket || typeof WebSocket === 'undefined') return;
+  const ws = new WebSocket(`${cfg.url.replace(/^http/, 'ws')}/v1/macs/${cfg.macId}/connect`);
+  relay.socket = ws;
+  ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', secret: cfg.macSecret }));
+  ws.onmessage = (event) => onRelayMessage(cfg, ws, event.data).catch((err) => console.log(`relay: ${err.message}`));
+  ws.onerror = () => {};
+  ws.onclose = (event) => {
+    if (relay.ready) console.log(`relay: disconnected (${event.code})`);
+    relay.socket = null;
+    relay.ready = false;
+    if (event.code === 4001) return console.log('relay: it no longer knows this Mac. Pair again with: node bridge/server.mjs pair');
+    setTimeout(connectRelay, relay.backoff);
+    relay.backoff = Math.min(relay.backoff * 2, 60 * 1000);
+  };
+}
+
+async function onRelayMessage(cfg, ws, data) {
+  if (data === 'pong') return;
+  const msg = JSON.parse(String(data));
+  if (msg.type === 'ready') {
+    relay.ready = true;
+    relay.backoff = 1000;
+    console.log(`relay: connected to ${cfg.url}`);
+    return;
+  }
+  if (msg.type !== 'rpc') return;
+  const key = keyFor(cfg, msg.watchId);
+  let reply;
+  try {
+    if (!key) throw new Error('This watch is not paired with this Mac');
+    const request = unseal(key, msg.box, msg.watchId);
+    const [status, body] = await api(String(request.method || 'GET'), String(request.path || '/'), request.body || {}, { viaRelay: true });
+    reply = seal(key, { status, body }, msg.watchId);
+  } catch (err) {
+    reply = key ? seal(key, { status: 400, body: { error: err.message || 'Bad request' } }, msg.watchId) : null;
+  }
+  ws.send(JSON.stringify({ type: 'rpc-reply', id: msg.id, box: reply }));
+}
+
+async function relayFetch(cfg, method, route, body) {
+  const res = await fetch(`${cfg.url}${route}`, {
+    method,
+    headers: { authorization: `Bearer ${cfg.macSecret}`, 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const answer = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(answer.error || `Relay returned ${res.status}`);
+  return answer;
+}
+
+function computerName() {
+  try {
+    return execFileSync('/usr/sbin/scutil', ['--get', 'ComputerName'], { encoding: 'utf8' }).trim();
+  } catch {
+    return os.hostname();
+  }
+}
+
+function ask(question) {
+  return new Promise((resolve) => {
+    process.stdout.write(question);
+    process.stdin.resume();
+    process.stdin.once('data', (d) => { process.stdin.pause(); resolve(String(d).trim()); });
+  });
+}
+
+// `pair`: signs this Mac up with the relay (first time only), shows a code to enter on the watch,
+// then has you compare the check numbers before the watch is let in.
+async function pairCommand() {
+  let cfg = loadJson(RELAY_FILE, null);
+  const url = (flag('--relay') || cfg?.url || DEFAULT_RELAY).replace(/\/+$/, '');
+  if (!url) {
+    console.error('Which relay? Run: node bridge/server.mjs pair --relay https://your-relay.example.com');
+    process.exit(1);
+  }
+  fs.mkdirSync(CONF_DIR, { recursive: true, mode: 0o700 });
+  if (!cfg || cfg.url !== url) {
+    const res = await fetch(`${url}/v1/macs`, { method: 'POST' });
+    const account = await res.json().catch(() => ({}));
+    if (!res.ok || !account.macId) throw new Error(account.error || `Could not reach the relay at ${url}`);
+    cfg = { url, macId: account.macId, macSecret: account.macSecret, ...newKeyPair() };
+    fs.writeFileSync(RELAY_FILE, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+    fs.writeFileSync(PAIRINGS_FILE, '{}', { mode: 0o600 }); // pairings belong to one relay account
+  }
+
+  const { code } = await relayFetch(cfg, 'POST', `/v1/macs/${cfg.macId}/pairing`, { pk: cfg.publicKey, name: computerName() });
+  console.log(`\nOn your watch, open Claude Watch, tap Pair with your Mac, and enter:\n\n      ${code.slice(0, 3)} ${code.slice(3)}\n\nThe code works once, for 10 minutes. Waiting for your watch…`);
+
+  let joined;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const state = await relayFetch(cfg, 'GET', `/v1/macs/${cfg.macId}/pairing`);
+    if (state.state === 'expired') throw new Error('The code expired. Run pair again.');
+    if (state.state === 'joined') { joined = state; break; }
+  }
+
+  const check = checkNumber(cfg.publicKey, joined.watchPk);
+  const answer = await ask(`\n"${joined.watchName}" wants to pair. Your watch shows a check number.\nIs it ${check}? Type y and press Return to allow, anything else to refuse: `);
+  const accept = /^y(es)?$/i.test(answer);
+  await relayFetch(cfg, 'POST', `/v1/macs/${cfg.macId}/pairing/confirm`, { watchId: joined.watchId, accept });
+  if (!accept) {
+    console.log('Refused. Nothing was paired.');
+    return;
+  }
+  const pairings = loadJson(PAIRINGS_FILE, {});
+  pairings[joined.watchId] = { pk: joined.watchPk, name: joined.watchName, pairedAt: Date.now() };
+  fs.writeFileSync(PAIRINGS_FILE, JSON.stringify(pairings, null, 2), { mode: 0o600 });
+  console.log(`\nPaired with "${joined.watchName}". The bridge connects to the relay within a few seconds.`);
+}
+
+// `unpair`: forgets every watch paired through the relay.
+async function unpairCommand() {
+  const cfg = loadJson(RELAY_FILE, null);
+  const pairings = loadJson(PAIRINGS_FILE, {});
+  for (const watchId of Object.keys(pairings)) {
+    try { await relayFetch(cfg, 'DELETE', `/v1/macs/${cfg.macId}/watches/${encodeURIComponent(watchId)}`); } catch {}
+    console.log(`Unpaired ${pairings[watchId].name}.`);
+  }
+  fs.writeFileSync(PAIRINGS_FILE, '{}', { mode: 0o600 });
 }
 
 // ---------- HTTP ----------
@@ -801,42 +1002,48 @@ async function handle(req, res) {
     await new Promise((r) => setTimeout(r, 500));
     return send(res, 401, { error: 'Unauthorized' });
   }
-  const url = new URL(req.url, 'http://localhost');
-  const parts = url.pathname.split('/').filter(Boolean);
+  const body = req.method === 'POST' ? await readBody(req) : {};
+  const [status, answer] = await api(req.method, new URL(req.url, 'http://localhost').pathname, body);
+  return send(res, status, answer);
+}
+
+// The watch API, reached over local HTTP (with the pairing token) or through the relay (from a
+// paired watch, end-to-end encrypted). Returns [status, body].
+async function api(method, pathname, body, { viaRelay = false } = {}) {
+  const parts = pathname.split('/').filter(Boolean);
   const [root, id, action] = parts;
 
-  if (root === 'status' && parts.length === 1 && req.method === 'GET') {
+  if (root === 'status' && parts.length === 1 && method === 'GET') {
     refreshUsage(); // in the background; this answer carries the last known numbers
     const { waiting, ...counts } = overview();
     const top = waiting[0] ? { id: waiting[0].id, title: waiting[0].title, question: waiting[0].question } : null;
-    return send(res, 200, { ...counts, top, usage: usageNow() });
+    return [200, { ...counts, top, usage: usageNow() }];
   }
 
-  if (root === 'devices' && parts.length === 1 && req.method === 'POST') {
-    const body = await readBody(req);
-    const deviceToken = String(body.token || '').toLowerCase();
-    if (!/^[0-9a-f]{32,200}$/.test(deviceToken)) return send(res, 400, { error: 'Bad device token' });
+  if (root === 'devices' && parts.length === 1 && method === 'POST') {
+        const deviceToken = String(body.token || '').toLowerCase();
+    if (!/^[0-9a-f]{32,200}$/.test(deviceToken)) return [400, { error: 'Bad device token' }];
     // "app" gets alerts; "widgets" is the watch face, which gets reload requests.
     const kind = body.kind === 'widgets' ? 'widgets' : 'app';
     const devices = loadJson(DEVICES_FILE, []).filter((d) => d.token !== deviceToken);
     devices.push({ token: deviceToken, kind, sandbox: Boolean(body.sandbox), at: Date.now() });
     const keep = [...devices.filter((d) => (d.kind || 'app') === 'app').slice(-3), ...devices.filter((d) => d.kind === 'widgets').slice(-3)];
     fs.writeFileSync(DEVICES_FILE, JSON.stringify(keep, null, 2), { mode: 0o600 });
-    return send(res, 200, { ok: true, push: fs.existsSync(APNS_FILE) });
+    return [200, { ok: true, push: fs.existsSync(APNS_FILE) }];
   }
 
-  if (root === 'token' && id === 'rotate' && parts.length === 2 && req.method === 'POST') {
+  if (root === 'token' && id === 'rotate' && parts.length === 2 && method === 'POST' && !viaRelay) {
     // A new pairing token; the old one, including the one built into the app, stops working.
     token = crypto.randomBytes(32).toString('base64url');
     fs.writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
     console.log('Pairing token rotated from the watch.');
-    return send(res, 200, { token });
+    return [200, { token }];
   }
 
-  if (root !== 'sessions' || parts.length > 3) return send(res, 404, { error: 'Not found' });
-  if (id && !UUID.test(id)) return send(res, 400, { error: 'Bad session id' });
+  if (root !== 'sessions' || parts.length > 3) return [404, { error: 'Not found' }];
+  if (id && !UUID.test(id)) return [400, { error: 'Bad session id' }];
 
-  if (req.method === 'GET' && !id) {
+  if (method === 'GET' && !id) {
     const live = liveSessions();
     const forks = loadForks();
     const sessions = sessionFiles()
@@ -849,47 +1056,46 @@ async function handle(req, res) {
         const needsYou = Boolean(attention(s, state, live.get(s.id)));
         return { id: s.id, title: s.title, project: s.project, updatedAt: s.updatedAt, state, needsYou, preview: s.preview, watchCopy: Boolean(forks[s.id]) };
       });
-    return send(res, 200, { sessions });
+    return [200, { sessions }];
   }
 
-  if (req.method === 'GET' && id && !action) {
+  if (method === 'GET' && id && !action) {
     const d = detail(id);
-    return d ? send(res, 200, d) : send(res, 404, { error: 'No such session' });
+    return d ? [200, d] : [404, { error: 'No such session' }];
   }
 
-  if (req.method === 'POST' && !id) {
-    const text = String((await readBody(req)).text || '').trim();
-    if (!text) return send(res, 400, { error: 'Empty message' });
+  if (method === 'POST' && !id) {
+    const text = String(body.text || '').trim();
+    if (!text) return [400, { error: 'Empty message' }];
     // "Tell <session> …" goes to that session instead of starting a new one.
     const routed = routeSpoken(text);
     if (routed) {
-      const [status, body] = deliver(routed.id, routed.text);
-      return send(res, status, status === 202 ? { ...body, routed: true } : body);
+      const [status, answer] = deliver(routed.id, routed.text);
+      return [status, status === 202 ? { ...answer, routed: true } : answer];
     }
     fs.mkdirSync(NEW_CWD, { recursive: true });
     const newId = crypto.randomUUID();
     startJob({ id: newId, cwd: NEW_CWD, text, resume: false });
     fromWatch.add(newId);
-    return send(res, 202, { id: newId, title: clip(text, 60) });
+    return [202, { id: newId, title: clip(text, 60) }];
   }
 
-  if (req.method === 'POST' && action === 'message') {
-    const text = String((await readBody(req)).text || '').trim();
-    if (!text) return send(res, 400, { error: 'Empty message' });
-    const [status, body] = deliver(id, text);
-    return send(res, status, body);
+  if (method === 'POST' && action === 'message') {
+    const text = String(body.text || '').trim();
+    if (!text) return [400, { error: 'Empty message' }];
+    return deliver(id, text);
   }
 
-  if (req.method === 'POST' && action === 'stop') {
+  if (method === 'POST' && action === 'stop') {
     const job = jobs.get(id);
-    if (job?.state !== 'running') return send(res, 409, { error: 'Nothing running' });
-    if (job.relay) return send(res, 409, { error: 'This session runs on your Mac and can only be stopped there' });
+    if (job?.state !== 'running') return [409, { error: 'Nothing running' }];
+    if (job.relay) return [409, { error: 'This session runs on your Mac and can only be stopped there' }];
     job.error = 'Stopped';
     job.proc?.kill('SIGTERM');
-    return send(res, 200, { id });
+    return [200, { id }];
   }
 
-  return send(res, 404, { error: 'Not found' });
+  return [404, { error: 'Not found' }];
 }
 
 // ---------- entry points ----------
@@ -913,37 +1119,28 @@ function flag(name) {
   return i > 0 ? process.argv[i + 1] : undefined;
 }
 
-function configure(rawUrl) {
-  let url;
-  try { url = new URL(rawUrl); } catch {}
-  if (!url || !/^https?:$/.test(url.protocol)) {
-    console.error('Usage: node bridge/server.mjs configure https://your-bridge-hostname [--team TEAM_ID] [--bundle-prefix com.you.claudewatch]');
+// Writes ClaudeWatch/Local.xcconfig: your Apple team, the bundle id prefix, and (optionally) the
+// relay your build of the app pairs through. Run once before building the app yourself.
+function configure() {
+  const current = signingSettings();
+  const teamId = flag('--team') || current.DEVELOPMENT_TEAM || '';
+  const bundlePrefix = flag('--bundle-prefix') || current.BUNDLE_PREFIX || '';
+  const relayHost = (flag('--relay') || current.RELAY_HOST || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  if (!/^[A-Z0-9]{10}$/.test(teamId)) {
+    console.error('Usage: node bridge/server.mjs configure --team <TEAM_ID> --bundle-prefix <com.you.claudewatch> [--relay <relay host>]\n' +
+      '--team is your 10-character Apple team ID (developer.apple.com → Membership).');
     process.exit(1);
   }
-  const team = flag('--team'), prefix = flag('--bundle-prefix');
-  if (team || prefix) {
-    const current = signingSettings();
-    const teamId = team || current.DEVELOPMENT_TEAM || '';
-    const bundlePrefix = prefix || current.BUNDLE_PREFIX;
-    if (!/^[A-Z0-9]{10}$/.test(teamId)) { console.error('--team must be your 10-character Apple team ID.'); process.exit(1); }
-    if (!/^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(bundlePrefix) || bundlePrefix === 'com.example.claudewatch') {
-      console.error('--bundle-prefix must be a reverse-DNS prefix you own, like com.yourname.claudewatch.');
-      process.exit(1);
-    }
-    fs.writeFileSync(LOCAL_XCCONFIG,
-      '// Written by `node bridge/server.mjs configure`. Your signing settings; git ignores this file.\n' +
-      `DEVELOPMENT_TEAM = ${teamId}\nBUNDLE_PREFIX = ${bundlePrefix}\n`);
-    console.log(`Wrote ${path.relative(process.cwd(), LOCAL_XCCONFIG)} (team ${teamId}, apps ${bundlePrefix}.*).`);
+  if (!/^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(bundlePrefix) || bundlePrefix === 'com.example.claudewatch') {
+    console.error('--bundle-prefix must be a reverse-DNS prefix you own, like com.yourname.claudewatch.');
+    process.exit(1);
   }
-  const out = path.join(APP_DIR, 'Shared', 'Config.generated.swift');
-  const base = url.origin + url.pathname.replace(/\/+$/, '');
-  fs.writeFileSync(out,
-    '// Written by `node bridge/server.mjs configure`. Holds your pairing token: do not commit.\n' +
-    'enum BakedConfig {\n' +
-    `    static let baseURL = ${JSON.stringify(base)}\n` +
-    `    static let token = ${JSON.stringify(loadToken())}\n` +
-    '}\n');
-  console.log(`Wrote ${path.relative(process.cwd(), out)} for ${base}. Rebuild the watch app.`);
+  fs.writeFileSync(LOCAL_XCCONFIG,
+    '// Written by `node bridge/server.mjs configure`. Your own settings; git ignores this file.\n' +
+    `DEVELOPMENT_TEAM = ${teamId}\nBUNDLE_PREFIX = ${bundlePrefix}\n` +
+    (relayHost ? `RELAY_HOST = ${relayHost}\n` : ''));
+  console.log(`Wrote ${path.relative(process.cwd(), LOCAL_XCCONFIG)}: team ${teamId}, apps ${bundlePrefix}.*` +
+    (relayHost ? `, relay ${relayHost}.` : '.'));
 }
 
 // Stores an Apple push key (Apple Developer > Keys, with Apple Push Notifications service enabled).
@@ -967,7 +1164,7 @@ function configurePush(keyPath) {
   }
   const { DEVELOPMENT_TEAM: teamId, BUNDLE_PREFIX: prefix } = signingSettings();
   if (!teamId || !prefix || prefix === 'com.example.claudewatch') {
-    console.error('Set your team and bundle prefix first: node bridge/server.mjs configure <url> --team <TEAM_ID> --bundle-prefix <com.you.claudewatch>');
+    console.error('Set your team and bundle prefix first: node bridge/server.mjs configure --team <TEAM_ID> --bundle-prefix <com.you.claudewatch>');
     process.exit(1);
   }
   const topic = `${prefix}.watchkitapp`;
@@ -978,9 +1175,13 @@ function configurePush(keyPath) {
 }
 
 if (process.argv[2] === 'configure') {
-  configure(process.argv[3]);
+  configure();
 } else if (process.argv[2] === 'push') {
   configurePush(process.argv[3]);
+} else if (process.argv[2] === 'pair' || process.argv[2] === 'unpair') {
+  (process.argv[2] === 'pair' ? pairCommand() : unpairCommand())
+    .then(() => process.exit(0))
+    .catch((err) => { console.error(err.message); process.exit(1); });
 } else if (process.argv[2] === 'route') {
   // Shows which session a dictated message would go to, without sending it.
   console.log(routeSpoken(process.argv.slice(3).join(' ')) || 'No session named: it would start a new session.');
@@ -1004,5 +1205,11 @@ if (process.argv[2] === 'configure') {
   });
   setInterval(watchSessions, WATCH_INTERVAL_MS);
   setInterval(saveCache, 30 * 1000);
+  // The relay, once `pair` has set it up; also keeps the connection from idling out.
+  connectRelay();
+  setInterval(() => {
+    connectRelay();
+    if (relay.ready) relay.socket.send('ping');
+  }, 15 * 1000);
   for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { saveCache(); process.exit(0); });
 }
