@@ -1,6 +1,6 @@
 {
   "name": "wrist-bridge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Use the Claude Code sessions on your Mac from your Apple Watch: the Mac companion for the Wrist Bridge app.",
   "type": "module",
   "bin": { "wrist-bridge": "cli.mjs" },

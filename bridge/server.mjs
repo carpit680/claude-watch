@@ -865,6 +865,19 @@ async function pairCommand() {
   console.log(`\nPaired with "${joined.watchName}". The bridge connects to the relay within a few seconds.`);
 }
 
+// Drops local pairings the relay no longer has (the watch unpaired itself, say). Keeps them all if
+// the relay can't be reached, rather than guessing.
+async function forgetUnpairedWatches() {
+  const cfg = loadJson(RELAY_FILE, null);
+  const pairings = loadJson(PAIRINGS_FILE, {});
+  if (!cfg || !Object.keys(pairings).length) return;
+  let watches;
+  try { ({ watches } = await relayFetch(cfg, 'GET', `/v1/macs/${cfg.macId}/watches`)); } catch { return; }
+  const live = new Set(watches.filter((w) => w.confirmed).map((w) => w.id));
+  for (const id of Object.keys(pairings)) if (!live.has(id)) delete pairings[id];
+  fs.writeFileSync(PAIRINGS_FILE, JSON.stringify(pairings, null, 2), { mode: 0o600 });
+}
+
 // `unpair`: forgets every watch paired through the relay.
 async function unpairCommand() {
   const cfg = loadJson(RELAY_FILE, null);
@@ -1239,9 +1252,11 @@ async function installCommand({ quiet = false } = {}) {
   if (path.resolve(self) !== path.resolve(installed)) fs.copyFileSync(self, installed);
 
   await stopAgents();
-  // The claude command the bridge runs, if it isn't the one inside the Claude desktop app.
-  const claudeOnPath = which('claude');
-  const env = claudeOnPath && findClaude() === 'claude' ? { CLAUDE_BIN: claudeOnPath } : {};
+  // Which claude the bridge runs. The desktop app's copy is found again at every start (its path
+  // changes with each update); any other is remembered, since login agents don't get your PATH.
+  const env = {};
+  if (process.env.CLAUDE_BIN) env.CLAUDE_BIN = process.env.CLAUDE_BIN;
+  else if (findClaude() === 'claude' && which('claude')) env.CLAUDE_BIN = which('claude');
   const started = ['local.claudewatch.bridge'];
   fs.writeFileSync(path.join(AGENTS_DIR, 'local.claudewatch.bridge.plist'), plist('local.claudewatch.bridge', 'bridge', [process.execPath, installed], env));
   const tunnel = process.env.TUNNEL_NAME || 'claude-watch';
@@ -1302,14 +1317,19 @@ async function setupCommand() {
   const major = Number(process.versions.node.split('.')[0]);
   if (major < 22) throw new Error(`Node 22 or later is needed (this is ${process.versions.node}). Update it, e.g. brew upgrade node.`);
 
+  // Everything setup needs, checked before anything is installed.
+  if (findClaude() === 'claude' && !which('claude')) {
+    throw new Error('Claude Code isn\'t set up for this Mac user yet. Either:\n' +
+      '  • open the Claude desktop app and its Code tab once, or\n' +
+      '  • install the command line: npm install -g @anthropic-ai/claude-code\n' +
+      'then run setup again.');
+  }
+
   say('1. Installing the bridge…');
   const command = await installCommand({ quiet: true });
   say(`   Done. It runs at login and restarts if it stops.`);
 
   say('2. Signing in to Claude…');
-  if (findClaude() === 'claude' && !which('claude')) {
-    throw new Error('Claude Code isn\'t installed. Install the Claude desktop app or Claude Code, then run setup again.');
-  }
   if (claudeSignedIn()) {
     say('   Already signed in.');
   } else {
@@ -1319,6 +1339,7 @@ async function setupCommand() {
   }
 
   say('3. Pairing your watch…');
+  await forgetUnpairedWatches();
   if (Object.keys(loadJson(PAIRINGS_FILE, {})).length) {
     say(`   A watch is already paired. To pair another, run: ${command} pair`);
   } else {
@@ -1335,6 +1356,7 @@ async function statusCommand() {
   try { running = (await fetch(`http://127.0.0.1:${PORT}/status`)).status === 401; } catch {}
   const log = (() => { try { return fs.readFileSync(path.join(CONF_DIR, 'logs', 'bridge.log'), 'utf8'); } catch { return ''; } })();
   const relayLine = log.split('\n').reverse().find((l) => l.startsWith('relay:')) || '';
+  await forgetUnpairedWatches();
   const pairings = Object.values(loadJson(PAIRINGS_FILE, {}));
   const ok = (b) => (b ? '✓' : '✗');
   console.log(`${ok(running)} Bridge ${running ? 'running' : 'not running (run setup)'}`);
