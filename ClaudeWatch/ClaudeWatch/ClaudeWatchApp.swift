@@ -100,12 +100,29 @@ struct SessionsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                TextFieldLink(prompt: Text("Ask Claude, or \"Tell harness to…\"")) {
-                    Label("New session", systemImage: "plus.bubble.fill")
-                } onSubmit: { text in
-                    Task { await startSession(text) }
+                // New session and usage, side by side.
+                HStack(spacing: 6) {
+                    TextFieldLink(prompt: Text("Ask Claude, or \"Tell harness to…\"")) {
+                        VStack(spacing: 3) {
+                            Image(systemName: "plus.bubble.fill").font(.title3)
+                            Text("New").font(.footnote.weight(.semibold))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 62)
+                        .background(Color.blue.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
+                    } onSubmit: { text in
+                        Task { await startSession(text) }
+                    }
+                    .buttonStyle(.plain)
+
+                    NavigationLink {
+                        UsageView(usage: status?.usage)
+                    } label: {
+                        UsageTile(usage: status?.usage)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .listItemTint(.blue)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
 
                 if !Bridge.isConfigured {
                     NavigationLink {
@@ -126,10 +143,6 @@ struct SessionsView: View {
 
                 if loaded && sessions.isEmpty && error == nil {
                     Text("No sessions yet").foregroundStyle(.secondary)
-                }
-
-                if let usage = status?.usage, usage.headline != nil {
-                    UsageRow(usage: usage)
                 }
 
                 NavigationLink("Settings") { SettingsView() }
@@ -230,7 +243,53 @@ struct SessionRow: View {
 
 }
 
-/// How much of your usage limits is spent, at the top of the sessions list.
+/// The usage limit you'd hit first, as a ring, next to the New button. Tap for the details.
+struct UsageTile: View {
+    let usage: UsageInfo?
+
+    var body: some View {
+        let head = usage?.headline
+        VStack(spacing: 3) {
+            Gauge(value: min(max(head?.used ?? 0, 0), 1)) {
+                EmptyView()
+            } currentValueLabel: {
+                Text(head.map { "\(Int(($0.used * 100).rounded()))" } ?? "–")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+            }
+            .gaugeStyle(.accessoryCircularCapacity)
+            .tint(usageColor(head?.used ?? 0))
+            .scaleEffect(0.8)
+            .frame(height: 38)
+            Text(usage?.session != nil ? "Session %" : "Week %")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 62)
+        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+func usageColor(_ used: Double) -> Color {
+    used >= 0.9 ? .red : used >= 0.7 ? .orange : .green
+}
+
+/// Usage details: every limit, with when it resets.
+struct UsageView: View {
+    let usage: UsageInfo?
+
+    var body: some View {
+        ScrollView {
+            if let usage, usage.headline != nil {
+                UsageRow(usage: usage)
+            } else {
+                Text("Your Mac hasn't reported usage yet.").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Usage")
+    }
+}
+
+/// How much of your usage limits is spent.
 struct UsageRow: View {
     let usage: UsageInfo
 
@@ -251,7 +310,7 @@ struct UsageRow: View {
             }
             .font(.caption)
             ProgressView(value: min(max(w.used, 0), 1))
-                .tint(w.used >= 0.9 ? .red : w.used >= 0.7 ? .orange : .green)
+                .tint(usageColor(w.used))
             Text("Resets \(w.resetDate, style: .relative)")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
