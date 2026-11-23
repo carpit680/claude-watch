@@ -1,0 +1,14 @@
+// Signing settings shared by every target.
+//
+// Don't edit this file: put your own values in Local.xcconfig, next to it (git ignores it).
+// `node bridge/server.mjs configure <url> --team <TEAM_ID> --bundle-prefix <com.you.claudewatch>`
+// writes that file for you.
+
+// Your Apple Developer team ID (Xcode > Settings > Apple Accounts, or developer.apple.com > Membership).
+DEVELOPMENT_TEAM =
+
+// Reverse-DNS prefix you own. The watch app is $(BUNDLE_PREFIX).watchkitapp, its complications
+// $(BUNDLE_PREFIX).watchkitapp.widgets, and they share the app group group.$(BUNDLE_PREFIX).
+BUNDLE_PREFIX = com.example.claudewatch
+
+#include? "Local.xcconfig"

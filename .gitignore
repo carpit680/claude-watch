@@ -1,0 +1,14 @@
+# Secrets and personal settings: written by `node bridge/server.mjs configure`
+ClaudeWatch/Shared/Config.generated.swift
+ClaudeWatch/Local.xcconfig
+*.p8
+
+# Build output and Xcode user state
+ClaudeWatch/build/
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+.DS_Store
+node_modules/
