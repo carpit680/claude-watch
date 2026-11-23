@@ -49,10 +49,12 @@ struct UsageWindow: Codable, Hashable {
     var resetDate: Date { Date(timeIntervalSince1970: resetsAt) }
 }
 
-/// The 5-hour session limit only shows up once Claude starts reporting it.
+/// The 5-hour session limit only shows up once Claude starts reporting it. `fable` is Fable's own
+/// weekly limit, on accounts that have one.
 struct UsageInfo: Codable, Hashable {
     let session: UsageWindow?
     let week: UsageWindow?
+    var fable: UsageWindow? = nil
     /// The limit you'd hit first: the session window when it is reported, else the week.
     var headline: UsageWindow? { session ?? week }
 }

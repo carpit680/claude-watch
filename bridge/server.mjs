@@ -515,35 +515,53 @@ function overview() {
 
 // ---------- usage limits ----------
 
-// Claude reports how much of each usage limit is spent whenever it answers, so a tiny
-// request to the bridge's own claude is enough to read them. Done only when the watch asks.
+// Claude reports how much of each usage limit is spent whenever it answers, so a tiny request
+// to the bridge's own claude is enough to read them. Done only when the watch asks, at most every
+// 10 minutes. The Fable limit (seven_day_overage_included, "Fable limit" in Claude Code) only shows
+// up on a Fable request, so the check asks Fable, stripped down to about 550 tokens; accounts
+// without Fable fall back to Haiku.
 const usage = { windows: {}, at: 0, probing: false };
+const PROBE_MODELS = ['claude-fable-5-2', 'haiku'];
 
-function refreshUsage() {
+function probeUsage(model) {
+  return new Promise((resolve) => {
+    const args = ['-p', '--model', model, '--system-prompt', 'Reply with ok.', '--tools', '', '--strict-mcp-config',
+      '--output-format', 'stream-json', '--verbose', '--no-session-persistence', 'ok'];
+    const proc = spawn(findClaude(), args, { cwd: NEW_CWD, env: childEnv(), stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    proc.stdout.on('data', (d) => { out += d; });
+    const timer = setTimeout(() => proc.kill('SIGTERM'), 60 * 1000);
+    const done = () => {
+      clearTimeout(timer);
+      const windows = {};
+      for (const line of out.split('\n')) {
+        let e = null;
+        try { e = JSON.parse(line); } catch {}
+        if (e?.type !== 'rate_limit_event') continue;
+        for (const [name, w] of Object.entries(e.rate_limit_info?.unifiedWindows || {})) {
+          if (typeof w?.utilization === 'number') windows[name] = { used: w.utilization, resetsAt: Number(w.resetsAt) || 0 };
+        }
+      }
+      resolve(windows);
+    };
+    proc.on('error', done);
+    proc.on('close', done);
+  });
+}
+
+async function refreshUsage() {
   if (usage.probing || Date.now() - usage.at < USAGE_TTL_MS) return;
   usage.probing = true;
   fs.mkdirSync(NEW_CWD, { recursive: true });
-  const args = ['-p', '--model', 'haiku', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', 'Reply with: ok'];
-  const proc = spawn(findClaude(), args, { cwd: NEW_CWD, env: childEnv(), stdio: ['ignore', 'pipe', 'ignore'] });
-  let out = '';
-  proc.stdout.on('data', (d) => { out += d; });
-  const timer = setTimeout(() => proc.kill('SIGTERM'), 60 * 1000);
-  const finish = () => {
-    clearTimeout(timer);
+  try {
+    for (const model of PROBE_MODELS) {
+      const windows = await probeUsage(model);
+      if (Object.keys(windows).length) { usage.windows = windows; break; }
+    }
+  } finally {
     usage.probing = false;
     usage.at = Date.now(); // also after a failure, so a broken claude is not retried on every request
-    for (const line of out.split('\n')) {
-      let e = null;
-      try { e = JSON.parse(line); } catch {}
-      if (e?.type !== 'rate_limit_event') continue;
-      for (const [name, w] of Object.entries(e.rate_limit_info?.unifiedWindows || {})) {
-        if (typeof w?.utilization === 'number') usage.windows[name] = { used: w.utilization, resetsAt: Number(w.resetsAt) || 0 };
-      }
-    }
-    out = '';
-  };
-  proc.on('error', finish);
-  proc.on('close', finish);
+  }
 }
 
 function usageNow() {
@@ -551,8 +569,8 @@ function usageNow() {
     const w = usage.windows[name];
     return w && w.resetsAt * 1000 > Date.now() ? w : null; // a window that has reset is no longer true
   };
-  const session = pick('five_hour'), week = pick('seven_day');
-  return session || week ? { session, week } : null;
+  const session = pick('five_hour'), week = pick('seven_day'), fable = pick('seven_day_overage_included');
+  return session || week || fable ? { session, week, fable } : null;
 }
 
 // ---------- push notifications ----------

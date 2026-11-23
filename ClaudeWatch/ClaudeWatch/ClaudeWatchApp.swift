@@ -243,26 +243,37 @@ struct SessionRow: View {
 
 }
 
-/// The usage limit you'd hit first, as a ring, next to the New button. Tap for the details.
+/// Usage as small rings next to the New button: the weekly total, and Fable's own limit when the
+/// account has one (else the 5-hour session limit). Tap for the details.
 struct UsageTile: View {
     let usage: UsageInfo?
 
+    private var rings: [(label: String, window: UsageWindow?)] {
+        guard let usage else { return [("Week", nil)] }
+        var out: [(String, UsageWindow?)] = [("All", usage.week)]
+        if let fable = usage.fable { out.append(("Fable", fable)) }
+        else if let session = usage.session { out.append(("5 hr", session)) }
+        return out
+    }
+
     var body: some View {
-        let head = usage?.headline
-        VStack(spacing: 3) {
-            Gauge(value: min(max(head?.used ?? 0, 0), 1)) {
-                EmptyView()
-            } currentValueLabel: {
-                Text(head.map { "\(Int(($0.used * 100).rounded()))" } ?? "–")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+        HStack(spacing: 2) {
+            ForEach(rings, id: \.label) { ring in
+                VStack(spacing: 1) {
+                    Gauge(value: min(max(ring.window?.used ?? 0, 0), 1)) {
+                        EmptyView()
+                    } currentValueLabel: {
+                        Text(ring.window.map { "\(Int(($0.used * 100).rounded()))" } ?? "–")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    }
+                    .gaugeStyle(.accessoryCircularCapacity)
+                    .tint(usageColor(ring.window?.used ?? 0))
+                    .scaleEffect(rings.count > 1 ? 0.62 : 0.8)
+                    .frame(height: 36)
+                    Text(ring.label).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
             }
-            .gaugeStyle(.accessoryCircularCapacity)
-            .tint(usageColor(head?.used ?? 0))
-            .scaleEffect(0.8)
-            .frame(height: 38)
-            Text(usage?.session != nil ? "Session %" : "Week %")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, minHeight: 62)
         .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
@@ -296,7 +307,8 @@ struct UsageRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let session = usage.session { bar("Session limit", session) }
-            if let week = usage.week { bar("This week", week) }
+            if let week = usage.week { bar("This week, all models", week) }
+            if let fable = usage.fable { bar("This week, Fable", fable) }
         }
         .padding(.vertical, 4)
     }

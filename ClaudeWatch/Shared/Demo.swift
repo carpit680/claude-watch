@@ -55,7 +55,8 @@ enum Demo {
                 "needsYou": 1, "working": 1, "idle": 2,
                 "top": ["id": sessions[0].id, "title": sessions[0].title, "question": "Follow the system setting by default?"],
                 "usage": ["session": ["used": 0.42, "resetsAt": now + 2 * 3600],
-                          "week": ["used": 0.27, "resetsAt": now + 4 * 86400]],
+                          "week": ["used": 0.27, "resetsAt": now + 4 * 86400],
+                          "fable": ["used": 0.33, "resetsAt": now + 4 * 86400]],
             ])
         }
         if path == "/sessions" && method == "GET" {

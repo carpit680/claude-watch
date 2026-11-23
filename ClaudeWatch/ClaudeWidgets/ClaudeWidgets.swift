@@ -203,6 +203,7 @@ struct UsageWidgetView: View {
                     Text("Claude usage").font(.caption2.weight(.semibold)).foregroundStyle(.orange).widgetAccentable()
                     if let session = usage.session { bar("Session", session) }
                     if let week = usage.week { bar("This week", week) }
+                    if let fable = usage.fable { bar("Fable", fable) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
