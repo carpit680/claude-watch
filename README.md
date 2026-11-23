@@ -48,7 +48,7 @@ Apple Watch app ──HTTPS──▶ relay (Cloudflare Worker) ◀──WebSocke
 
 **Website with screenshots: https://carpit680.github.io/claude-watch/**
 
-1. Install **Wrist Bridge** on your Apple Watch from the App Store, and open it.
+1. Install **Wrist Bridge** on your Apple Watch from the [App Store](https://apps.apple.com/app/id6838125368), and open it.
 2. On your Mac:
 
    ```bash

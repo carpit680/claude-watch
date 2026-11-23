@@ -36,7 +36,7 @@ wrist-bridge status    # bridge running, relay connected, signed in, paired
 
 ## 2. Get the app on the watch
 
-If the app is installed from the App Store (search for Wrist Bridge), skip to step 3. Otherwise build it:
+If the app is installed from the App Store (https://apps.apple.com/app/id6838125368), skip to step 3. Otherwise build it:
 
 - Find the Apple team ID yourself where you can: with Xcode signed in,
   `security find-identity -v -p codesigning` shows `Apple Development: … (TEAMID)`. Otherwise
