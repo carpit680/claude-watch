@@ -96,6 +96,10 @@ struct SessionsView: View {
     @State private var error: String?
     @State private var loaded = false
     @State private var path: [SessionRoute] = []
+    @State private var showOlder = false
+
+    private var current: [SessionSummary] { sessions.filter { $0.older != true } }
+    private var older: [SessionSummary] { sessions.filter { $0.older == true } }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -135,9 +139,27 @@ struct SessionsView: View {
                     Text(error).font(.footnote).foregroundStyle(.red)
                 }
 
-                ForEach(sessions) { session in
+                ForEach(current) { session in
                     NavigationLink(value: SessionRoute(id: session.id, title: session.title)) {
                         SessionRow(session: session)
+                    }
+                }
+
+                // Archived, deleted and old sessions, out of the way until asked for.
+                if !older.isEmpty {
+                    Button {
+                        withAnimation { showOlder.toggle() }
+                    } label: {
+                        Label(showOlder ? "Hide older" : "Show \(older.count) older", systemImage: showOlder ? "chevron.up" : "chevron.down")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    if showOlder {
+                        ForEach(older) { session in
+                            NavigationLink(value: SessionRoute(id: session.id, title: session.title)) {
+                                SessionRow(session: session).opacity(0.7)
+                            }
+                        }
                     }
                 }
 

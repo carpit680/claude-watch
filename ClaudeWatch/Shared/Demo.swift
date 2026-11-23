@@ -65,6 +65,7 @@ enum Demo {
                     "id": s.id, "title": s.title, "project": s.project, "state": s.state,
                     "updatedAt": now - s.minutesAgo * 60, "preview": s.turns.last?["text"] ?? "",
                     "needsYou": s.choices != nil && sent[s.id] == nil, "watchCopy": false,
+                    "older": s.minutesAgo > 60 * 24,
                 ] as [String: Any]
             }])
         }

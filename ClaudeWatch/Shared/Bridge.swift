@@ -9,6 +9,8 @@ struct SessionSummary: Codable, Identifiable, Hashable {
     let preview: String
     let watchCopy: Bool?
     let needsYou: Bool?
+    /// Archived, deleted, or old: not in the desktop app's list. Shown behind "Show older".
+    let older: Bool?
 }
 
 struct Turn: Codable, Hashable {

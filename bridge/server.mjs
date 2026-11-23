@@ -299,6 +299,35 @@ function findSessionFile(id) {
   return sessionFiles().find((f) => path.basename(f, '.jsonl') === id) || null;
 }
 
+// ---------- the Claude desktop app's own list ----------
+
+const DESKTOP_DIR = path.join(HOME, 'Library', 'Application Support', 'Claude', 'claude-code-sessions');
+
+// The sessions the Claude desktop app lists: transcript id -> { title, cwd, archived }, or null when
+// the desktop app isn't used on this Mac. Deleted sessions have no entry.
+function desktopSessions() {
+  let accounts = [];
+  try { accounts = fs.readdirSync(DESKTOP_DIR); } catch { return null; }
+  const out = new Map();
+  for (const account of accounts) {
+    let spaces = [];
+    try { spaces = fs.readdirSync(path.join(DESKTOP_DIR, account)); } catch { continue; }
+    for (const space of spaces) {
+      const dir = path.join(DESKTOP_DIR, account, space);
+      let names = [];
+      try { names = fs.readdirSync(dir); } catch { continue; }
+      for (const name of names) {
+        if (!name.startsWith('local_') || !name.endsWith('.json')) continue;
+        try {
+          const r = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+          if (r.cliSessionId) out.set(r.cliSessionId, { title: r.title || '', cwd: r.originCwd || r.cwd || '', archived: Boolean(r.isArchived) });
+        } catch {}
+      }
+    }
+  }
+  return out.size ? out : null;
+}
+
 // ---------- sessions open on the Mac ----------
 
 // Sessions that a running interactive claude process (desktop app or terminal) has open:
@@ -1077,16 +1106,27 @@ async function api(method, pathname, body, { viaRelay = false } = {}) {
   if (method === 'GET' && !id) {
     const live = liveSessions();
     const forks = loadForks();
-    const sessions = sessionFiles()
+    const desktop = desktopSessions();
+    const all = sessionFiles()
       .map((f) => { try { return summarize(f); } catch { return null; } })
       .filter((s) => s && s.turns.length > 0)
       .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, 30)
       .map((s) => {
         const state = stateOf(s.id, s, live);
         const needsYou = Boolean(attention(s, state, live.get(s.id)));
-        return { id: s.id, title: s.title, project: s.project, updatedAt: s.updatedAt, state, needsYou, preview: s.preview, watchCopy: Boolean(forks[s.id]) };
+        const record = desktop?.get(s.id);
+        // Current: what the desktop app lists, anything open or busy, and work started from the
+        // watch. The rest (archived, deleted, old runs) is "older", behind a button on the watch.
+        // Without the desktop app there is nothing to go by, so everything counts as current.
+        const older = Boolean(desktop) && !(record && !record.archived) && !live.has(s.id) &&
+          state !== 'running' && state !== 'active' && !needsYou && !forks[s.id] && !fromWatch.has(s.id);
+        return {
+          id: s.id, title: record?.title ? clip(record.title, 60) : s.title,
+          project: record?.cwd ? path.basename(record.cwd) : s.project,
+          updatedAt: s.updatedAt, state, needsYou, preview: s.preview, watchCopy: Boolean(forks[s.id]), older,
+        };
       });
+    const sessions = [...all.filter((s) => !s.older).slice(0, 30), ...all.filter((s) => s.older).slice(0, 20)];
     return [200, { sessions }];
   }
 
