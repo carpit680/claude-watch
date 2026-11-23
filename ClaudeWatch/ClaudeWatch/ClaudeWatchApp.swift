@@ -35,11 +35,18 @@ final class Router: ObservableObject {
 /// Signs up for alerts, answers from their buttons, and opens the right session when one is tapped.
 final class AppDelegate: NSObject, WKApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching() {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("-demo") { Demo.isOn = true } // simulator screenshots
+        if let i = args.firstIndex(of: "-open"), i + 1 < args.count {
+            Task { @MainActor in Router.shared.open = SessionRoute(id: args[i + 1], title: "Session") }
+        }
+        #endif
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.setNotificationCategories(Alerts.categories)
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-showPairing") { return } // screenshots: no permission prompt
+        if ProcessInfo.processInfo.arguments.contains("-showPairing") || ProcessInfo.processInfo.arguments.contains("-demo") { return } // screenshots: no permission prompt
         #endif
         Task { @MainActor in
             let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
@@ -111,10 +118,6 @@ struct SessionsView: View {
                     Text(error).font(.footnote).foregroundStyle(.red)
                 }
 
-                if let usage = status?.usage, usage.headline != nil {
-                    UsageRow(usage: usage)
-                }
-
                 ForEach(sessions) { session in
                     NavigationLink(value: SessionRoute(id: session.id, title: session.title)) {
                         SessionRow(session: session)
@@ -123,6 +126,10 @@ struct SessionsView: View {
 
                 if loaded && sessions.isEmpty && error == nil {
                     Text("No sessions yet").foregroundStyle(.secondary)
+                }
+
+                if let usage = status?.usage, usage.headline != nil {
+                    UsageRow(usage: usage)
                 }
 
                 NavigationLink("Settings") { SettingsView() }
@@ -199,11 +206,10 @@ struct SessionRow: View {
                 // The bar's color carries the status; this line says where and when.
                 HStack(spacing: 4) {
                     if session.watchCopy == true { Image(systemName: "applewatch").font(.system(size: 9)) }
-                    Text(session.project).lineLimit(1)
+                    Text(session.project).lineLimit(1).layoutPriority(1)
                     Text("·")
-                    Text(Date(timeIntervalSince1970: session.updatedAt), format: .relative(presentation: .named))
+                    Text(Date(timeIntervalSince1970: session.updatedAt), format: .relative(presentation: .numeric, unitsStyle: .abbreviated))
                         .lineLimit(1)
-                        .layoutPriority(1)
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -258,12 +264,25 @@ struct SettingsView: View {
     @AppStorage("baseURL", store: Bridge.shared) private var baseURL = ""
     @AppStorage("token", store: Bridge.shared) private var token = ""
     @State private var pairing = Relay.pairing
+    @State private var demo = Demo.isOn
     @State private var confirmUnpair = false
     @State private var confirmRotate = false
     @State private var note: String?
 
     var body: some View {
         Form {
+            if demo {
+                Section {
+                    Text("Showing sample sessions.")
+                    Button("Leave the demo") {
+                        Demo.isOn = false
+                        demo = false
+                        WidgetCenter.shared.reloadAllTimelines()
+                    }
+                } header: {
+                    Text("Demo")
+                }
+            }
             Section {
                 if let pairing, pairing.confirmed {
                     LabeledContent("Paired with", value: pairing.macName)
@@ -375,9 +394,13 @@ struct PairView: View {
                     .minimumScaleFactor(0.8)
                     CodePad(code: $code, working: working) { Task { await join() } }
                 }
+                // The keys use the screen down to its rounded bottom edge.
+                .padding(.bottom, 6)
+                .ignoresSafeArea(edges: .bottom)
             }
         }
         .navigationTitle("Pair")
+        .toolbarTitleDisplayMode(.inline)
         .task(id: check) {
             // Wait for the person to confirm on the Mac.
             guard check != nil else { return }
@@ -397,6 +420,16 @@ struct PairView: View {
     }
 
     private func join() async {
+        if code == Demo.code {
+            // For App Review and screenshots: sample sessions, no Mac needed.
+            Demo.isOn = true
+            paired = true
+            WKInterfaceDevice.current().play(.success)
+            WidgetCenter.shared.reloadAllTimelines()
+            try? await Task.sleep(for: .seconds(1))
+            dismiss()
+            return
+        }
         guard code.count == 6, !relay.isEmpty, !working else { return }
         working = true
         defer { working = false }
@@ -437,7 +470,7 @@ struct CodePad: View {
                         } else {
                             Button { press(key) } label: {
                                 Text(key)
-                                    .font(.system(size: 17, weight: .medium, design: .rounded))
+                                    .font(.system(size: 20, weight: .medium, design: .rounded))
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 7))
                                     .contentShape(Rectangle())

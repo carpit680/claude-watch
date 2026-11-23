@@ -176,6 +176,11 @@ More in [SECURITY.md](SECURITY.md).
 
 Bridge logs are in `~/.claude-watch/logs/`.
 
+## Privacy
+
+See [PRIVACY.md](PRIVACY.md). In short: no accounts, analytics or tracking. Your prompts and
+replies are encrypted end to end, and the relay keeps only what it needs to connect and alert.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed; see [LICENSE](LICENSE).

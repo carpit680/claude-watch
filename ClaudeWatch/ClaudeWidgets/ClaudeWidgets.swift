@@ -67,7 +67,7 @@ struct SessionsWidget: Widget {
                 .widgetURL(entry.status?.top.map { AppLink.session($0.id) } ?? AppLink.home)
         }
         .pushHandler(WatchFacePush.self)
-        .configurationDisplayName("Claude sessions")
+        .configurationDisplayName("Sessions")
         .description("What your sessions are doing, and which one needs you.")
         .supportedFamilies([.accessoryRectangular, .accessoryCircular, .accessoryInline, .accessoryCorner])
     }
@@ -167,7 +167,7 @@ struct UsageWidget: Widget {
                 .widgetURL(AppLink.home)
         }
         .pushHandler(WatchFacePush.self)
-        .configurationDisplayName("Claude usage")
+        .configurationDisplayName("Usage")
         .description("How much of your usage limit is spent.")
         .supportedFamilies([.accessoryCircular, .accessoryCorner, .accessoryRectangular, .accessoryInline])
     }

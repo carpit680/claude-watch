@@ -125,7 +125,7 @@ enum Bridge {
     static var baseURL: String { setting("baseURL") ?? "" }
     static var token: String { setting("token") ?? "" }
     static var usesDirect: Bool { !Relay.isPaired && !baseURL.isEmpty && !token.isEmpty }
-    static var isConfigured: Bool { Relay.isPaired || usesDirect }
+    static var isConfigured: Bool { Demo.isOn || Relay.isPaired || usesDirect }
 
     private static func setting(_ key: String) -> String? {
         let value = (shared.string(forKey: key) ?? UserDefaults.standard.string(forKey: key))?
@@ -181,6 +181,7 @@ enum Bridge {
     static func registerDevice(_ token: String, sandbox: Bool, kind: String = "app") async throws {
         // Remembered, so they can be sent again after pairing.
         shared.set(token, forKey: "pushToken.\(kind)")
+        if Demo.isOn { return }
         if Relay.isPaired {
             try await Relay.registerDevice(token, sandbox: sandbox, kind: kind)
         } else if usesDirect {
@@ -217,6 +218,9 @@ enum Bridge {
     }
 
     private static func request<T: Decodable>(_ method: String, _ path: String, body: [String: Any]?) async throws -> T {
+        if Demo.isOn {
+            return try JSONDecoder().decode(T.self, from: Demo.answer(method, path, body: body))
+        }
         if Relay.isPaired {
             let (status, data) = try await Relay.call(method, path, body: body)
             guard (200..<300).contains(status) else {
