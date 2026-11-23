@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-// Claude Watch bridge: lets an Apple Watch app list this Mac's Claude Code sessions, talk to
-// them, see their replies, and get alerts when one needs you. No dependencies beyond Node 18+.
+// Wrist Bridge: lets an Apple Watch list this Mac's Claude Code sessions, talk to them, see their
+// replies, and get alerts when one needs you. One file, no dependencies, Node 22+.
 //
-//   node bridge/server.mjs                    start the bridge on 127.0.0.1
-//   node bridge/server.mjs login              sign the bridge's claude in (once)
+//   npx wrist-bridge setup     install, sign in to Claude, and pair a watch (start here)
+//   wrist-bridge help          every command: pair, unpair, status, login, uninstall, serve, …
+//
+// Developer commands (from a clone of the repository):
 //   node bridge/server.mjs configure --team <TEAM_ID> --bundle-prefix <com.you.claudewatch> [--relay <host>]
-//                                             signing settings for building the app yourself
-//   node bridge/server.mjs push [AuthKey.p8]  store an Apple push key (default: newest in ~/Downloads)
-//   node bridge/server.mjs pair [--relay <url>]  pair a watch through the relay (no tunnel needed)
-//   node bridge/server.mjs unpair             forget the watches paired through the relay
-//   node bridge/server.mjs route "<text>"     show which session a dictated message would go to
+//   node bridge/server.mjs push [AuthKey.p8]  an Apple push key, for direct connections only
+//   node bridge/server.mjs route "<text>"     which session a dictated message would go to
 //
 // Environment:
 //   BRIDGE_PORT              port to listen on (default 8787)
@@ -18,6 +17,7 @@
 //   BRIDGE_LIVE_MODE         "relay" (default) delivers into sessions open on the Mac; "copy" forks them
 //   BRIDGE_DONE_MIN_SECONDS  shortest turn at the Mac that gets a "done" alert (default 45)
 //   BRIDGE_KEEP_AWAKE        "0" lets the Mac sleep while the bridge runs
+//   BRIDGE_RELAY             relay for new pairings (default: the shared relay)
 //   CLAUDE_BIN               path to the claude binary, if not found automatically
 
 import http from 'node:http';
@@ -765,7 +765,7 @@ function connectRelay() {
     if (relay.ready) console.log(`relay: disconnected (${event.code})`);
     relay.socket = null;
     relay.ready = false;
-    if (event.code === 4001) return console.log('relay: it no longer knows this Mac. Pair again with: node bridge/server.mjs pair');
+    if (event.code === 4001) return console.log('relay: it no longer knows this Mac. Pair again with: wrist-bridge pair');
     setTimeout(connectRelay, relay.backoff);
     relay.backoff = Math.min(relay.backoff * 2, 60 * 1000);
   };
@@ -827,7 +827,7 @@ async function pairCommand() {
   let cfg = loadJson(RELAY_FILE, null);
   const url = (flag('--relay') || cfg?.url || DEFAULT_RELAY).replace(/\/+$/, '');
   if (!url) {
-    console.error('Which relay? Run: node bridge/server.mjs pair --relay https://your-relay.example.com');
+    console.error('Which relay? Run: wrist-bridge pair --relay https://your-relay.example.com');
     process.exit(1);
   }
   fs.mkdirSync(CONF_DIR, { recursive: true, mode: 0o700 });
@@ -841,13 +841,13 @@ async function pairCommand() {
   }
 
   const { code } = await relayFetch(cfg, 'POST', `/v1/macs/${cfg.macId}/pairing`, { pk: cfg.publicKey, name: computerName() });
-  console.log(`\nOn your watch, open Claude Watch, tap Pair with your Mac, and enter:\n\n      ${code.slice(0, 3)} ${code.slice(3)}\n\nThe code works once, for 10 minutes. Waiting for your watch…`);
+  console.log(`\nOn your watch, open Wrist Bridge, tap Pair with your Mac, and enter:\n\n      ${code.slice(0, 3)} ${code.slice(3)}\n\nThe code works once, for 10 minutes. Waiting for your watch…`);
 
   let joined;
   for (;;) {
     await new Promise((r) => setTimeout(r, 2000));
     const state = await relayFetch(cfg, 'GET', `/v1/macs/${cfg.macId}/pairing`);
-    if (state.state === 'expired') throw new Error('The code expired. Run pair again.');
+    if (state.state === 'expired') throw new Error('The code expired. Run pair again for a new one.');
     if (state.state === 'joined') { joined = state; break; }
   }
 
@@ -1174,20 +1174,215 @@ function configurePush(keyPath) {
   console.log(`Push key ${keyId} stored in ${CONF_DIR}. Notifications are on; you can delete the downloaded file.`);
 }
 
-if (process.argv[2] === 'configure') {
+// ---------- installing on this Mac ----------
+
+const AGENTS_DIR = path.join(HOME, 'Library', 'LaunchAgents');
+const AGENT_LABELS = ['local.claudewatch.bridge', 'local.claudewatch.tunnel'];
+const COMMANDS = ['wrist-bridge', 'claude-watch']; // the second is the older name
+const BIN_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', path.join(HOME, '.local', 'bin')];
+const DOMAIN = `gui/${process.getuid?.() ?? ''}`;
+
+function run(cmd, args) {
+  try { return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return null; }
+}
+
+function which(name) {
+  return run('/bin/sh', ['-lc', `command -v ${name}`])?.trim() || '';
+}
+
+function plist(label, log, programArgs, extraEnv = {}) {
+  const x = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const env = { PATH: [path.dirname(process.execPath), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'), HOME, ...extraEnv };
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${label}</string>
+  <key>ProgramArguments</key>
+  <array>
+${programArgs.map((a) => `    <string>${x(a)}</string>`).join('\n')}
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+${Object.entries(env).map(([k, v]) => `    <key>${k}</key><string>${x(v)}</string>`).join('\n')}
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>${x(path.join(CONF_DIR, 'logs', `${log}.log`))}</string>
+  <key>StandardErrorPath</key><string>${x(path.join(CONF_DIR, 'logs', `${log}.log`))}</string>
+</dict>
+</plist>
+`;
+}
+
+async function stopAgents() {
+  for (const label of AGENT_LABELS) {
+    run('/bin/launchctl', ['bootout', `${DOMAIN}/${label}`]);
+    // bootout returns before the agent is gone; starting it again too early fails.
+    for (let i = 0; i < 20 && run('/bin/launchctl', ['print', `${DOMAIN}/${label}`]) !== null; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+}
+
+// Copies this bridge to ~/.claude-watch, runs it at login (restarting it if it stops), and
+// installs the `wrist-bridge` command. Also runs a Cloudflare tunnel named claude-watch, if you
+// made one for a direct connection.
+async function installCommand({ quiet = false } = {}) {
+  if (process.platform !== 'darwin') throw new Error('The bridge runs on macOS.');
+  fs.mkdirSync(path.join(CONF_DIR, 'logs'), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(CONF_DIR, 'bin'), { recursive: true });
+  fs.mkdirSync(AGENTS_DIR, { recursive: true });
+  const installed = path.join(CONF_DIR, 'server.mjs');
+  const self = fileURLToPath(import.meta.url);
+  if (path.resolve(self) !== path.resolve(installed)) fs.copyFileSync(self, installed);
+
+  await stopAgents();
+  // The claude command the bridge runs, if it isn't the one inside the Claude desktop app.
+  const claudeOnPath = which('claude');
+  const env = claudeOnPath && findClaude() === 'claude' ? { CLAUDE_BIN: claudeOnPath } : {};
+  const started = ['local.claudewatch.bridge'];
+  fs.writeFileSync(path.join(AGENTS_DIR, 'local.claudewatch.bridge.plist'), plist('local.claudewatch.bridge', 'bridge', [process.execPath, installed], env));
+  const tunnel = process.env.TUNNEL_NAME || 'claude-watch';
+  const cloudflared = which('cloudflared');
+  const tunnels = cloudflared ? run(cloudflared, ['tunnel', 'list']) || '' : '';
+  if (tunnels.split('\n').some((line) => line.split(/\s+/)[1] === tunnel)) {
+    fs.writeFileSync(path.join(AGENTS_DIR, 'local.claudewatch.tunnel.plist'),
+      plist('local.claudewatch.tunnel', 'tunnel', [cloudflared, 'tunnel', '--no-autoupdate', 'run', '--url', `http://localhost:${PORT}`, tunnel]));
+    started.push('local.claudewatch.tunnel');
+  } else {
+    fs.rmSync(path.join(AGENTS_DIR, 'local.claudewatch.tunnel.plist'), { force: true });
+  }
+  for (const label of started) run('/bin/launchctl', ['bootstrap', DOMAIN, path.join(AGENTS_DIR, `${label}.plist`)]);
+
+  // The command for pairing and the rest.
+  const shim = path.join(CONF_DIR, 'bin', 'wrist-bridge');
+  fs.writeFileSync(shim, `#!/bin/sh\nWRIST_BRIDGE_CLI=1 exec "${process.execPath}" "${installed}" "$@"\n`, { mode: 0o755 });
+  let command = shim;
+  for (const dir of BIN_DIRS) {
+    try {
+      fs.accessSync(dir, fs.constants.W_OK);
+      for (const name of COMMANDS) {
+        fs.rmSync(path.join(dir, name), { force: true });
+        fs.symlinkSync(shim, path.join(dir, name));
+      }
+      command = 'wrist-bridge';
+      break;
+    } catch {}
+  }
+  if (!quiet) console.log(`Installed (${started.join(', ')}). Logs are in ${path.join(CONF_DIR, 'logs')}.`);
+  return command;
+}
+
+async function uninstallCommand() {
+  await stopAgents();
+  for (const label of AGENT_LABELS) fs.rmSync(path.join(AGENTS_DIR, `${label}.plist`), { force: true });
+  for (const dir of BIN_DIRS) {
+    for (const name of COMMANDS) {
+      try { if (fs.lstatSync(path.join(dir, name)).isSymbolicLink()) fs.rmSync(path.join(dir, name)); } catch {}
+    }
+  }
+  console.log(`Removed the bridge and its command. Your settings stay in ${CONF_DIR}; delete that folder to remove them too.`);
+}
+
+function claudeSignedIn() {
+  const out = run(findClaude(), ['auth', 'status', '--json']);
+  try { return JSON.parse(out).loggedIn === true; } catch { return false; }
+}
+
+function claudeLogin() {
+  return new Promise((resolve) => spawn(findClaude(), ['auth', 'login'], { stdio: 'inherit', env: childEnv() }).on('close', resolve));
+}
+
+// `setup`: everything, in order, skipping what is already done.
+async function setupCommand() {
+  const say = (s) => console.log(s);
+  say('\nWrist Bridge setup\n');
+  const major = Number(process.versions.node.split('.')[0]);
+  if (major < 22) throw new Error(`Node 22 or later is needed (this is ${process.versions.node}). Update it, e.g. brew upgrade node.`);
+
+  say('1. Installing the bridge…');
+  const command = await installCommand({ quiet: true });
+  say(`   Done. It runs at login and restarts if it stops.`);
+
+  say('2. Signing in to Claude…');
+  if (findClaude() === 'claude' && !which('claude')) {
+    throw new Error('Claude Code isn\'t installed. Install the Claude desktop app or Claude Code, then run setup again.');
+  }
+  if (claudeSignedIn()) {
+    say('   Already signed in.');
+  } else {
+    say('   A browser window opens; sign in there.');
+    await claudeLogin();
+    if (!claudeSignedIn()) throw new Error(`Not signed in. Run ${command} login, then ${command} setup again.`);
+  }
+
+  say('3. Pairing your watch…');
+  if (Object.keys(loadJson(PAIRINGS_FILE, {})).length) {
+    say(`   A watch is already paired. To pair another, run: ${command} pair`);
+  } else {
+    say('   Install Wrist Bridge from the App Store on your watch, and open it.');
+    await pairCommand();
+  }
+
+  say(`\nAll set. Keep your Mac plugged in so it stays reachable.\nLater: ${command} status · ${command} pair · ${command} unpair · ${command} uninstall`);
+}
+
+// `status`: is the bridge running, connected, signed in, and paired?
+async function statusCommand() {
+  let running = false;
+  try { running = (await fetch(`http://127.0.0.1:${PORT}/status`)).status === 401; } catch {}
+  const log = (() => { try { return fs.readFileSync(path.join(CONF_DIR, 'logs', 'bridge.log'), 'utf8'); } catch { return ''; } })();
+  const relayLine = log.split('\n').reverse().find((l) => l.startsWith('relay:')) || '';
+  const pairings = Object.values(loadJson(PAIRINGS_FILE, {}));
+  const ok = (b) => (b ? '✓' : '✗');
+  console.log(`${ok(running)} Bridge ${running ? 'running' : 'not running (run setup)'}`);
+  console.log(`${ok(relayLine.includes('connected to'))} Relay ${relayLine.replace(/^relay:\s*/, '') || 'not connected yet'}`);
+  console.log(`${ok(claudeSignedIn())} Claude sign-in`);
+  console.log(`${ok(pairings.length)} Paired: ${pairings.map((p) => p.name).join(', ') || 'no watch yet (run pair)'}`);
+}
+
+const HELP = `Wrist Bridge: your Mac's Claude Code sessions on your Apple Watch.
+
+  setup       install the bridge, sign in to Claude, and pair your watch
+  pair        pair a watch (shows a code to enter on it)
+  unpair      forget paired watches
+  status      check the bridge, relay, sign-in and pairing
+  login       sign the bridge in to Claude
+  uninstall   stop the bridge and remove its command
+  serve       run the bridge in this terminal (normally it runs at login)
+
+More: https://carpit680.github.io/claude-watch/`;
+
+const cliTask = (task) => task.then(() => process.exit(0)).catch((err) => { console.error(`\n${err.message}`); process.exit(1); });
+const command = process.argv[2] || (process.env.WRIST_BRIDGE_CLI ? 'help' : 'serve');
+
+if (command === 'help' || command === '--help' || command === '-h') {
+  console.log(HELP);
+} else if (command === 'setup') {
+  cliTask(setupCommand());
+} else if (command === 'install') {
+  cliTask(installCommand().then((c) => console.log(`Pair your watch with: ${c} pair`)));
+} else if (command === 'uninstall') {
+  cliTask(uninstallCommand());
+} else if (command === 'status') {
+  cliTask(statusCommand());
+} else if (command === 'configure') {
   configure();
-} else if (process.argv[2] === 'push') {
+} else if (command === 'push') {
   configurePush(process.argv[3]);
-} else if (process.argv[2] === 'pair' || process.argv[2] === 'unpair') {
-  (process.argv[2] === 'pair' ? pairCommand() : unpairCommand())
-    .then(() => process.exit(0))
-    .catch((err) => { console.error(err.message); process.exit(1); });
-} else if (process.argv[2] === 'route') {
+} else if (command === 'pair' || command === 'unpair') {
+  cliTask(command === 'pair' ? pairCommand() : unpairCommand());
+} else if (command === 'route') {
   // Shows which session a dictated message would go to, without sending it.
   console.log(routeSpoken(process.argv.slice(3).join(' ')) || 'No session named: it would start a new session.');
-} else if (process.argv[2] === 'login') {
+} else if (command === 'login') {
   // The desktop app's sign-in is not shared with the command-line claude the bridge runs.
   spawn(findClaude(), ['auth', 'login'], { stdio: 'inherit' }).on('close', (code) => process.exit(code ?? 0));
+} else if (command !== 'serve') {
+  console.error(`Unknown command: ${command}\n\n${HELP}`);
+  process.exit(1);
 } else {
   token = loadToken();
   const server = http.createServer((req, res) => {
@@ -1199,7 +1394,7 @@ if (process.argv[2] === 'configure') {
     spawn('/usr/bin/caffeinate', ['-s', '-w', String(process.pid)], { stdio: 'ignore' }).on('error', () => {});
   }
   server.listen(PORT, '127.0.0.1', () => {
-    console.log(`Claude Watch bridge listening on http://127.0.0.1:${PORT}`);
+    console.log(`Wrist Bridge listening on http://127.0.0.1:${PORT}`);
     console.log(`claude: ${findClaude()}`);
     console.log(`Pairing token is stored in ${TOKEN_FILE}`);
   });

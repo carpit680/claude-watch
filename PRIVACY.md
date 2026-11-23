@@ -17,7 +17,7 @@ To connect your watch to your Mac without either one needing a public address, t
 relay service we run on Cloudflare. It keeps the minimum needed to do that:
 
 - **Random ids and secrets** for your Mac and each paired watch, the devices' public keys, and the
-  time each watch was paired. These are kept until you unpair (`claude-watch unpair`, or Unpair in
+  time each watch was paired. These are kept until you unpair (`wrist-bridge unpair`, or Unpair in
   the app's Settings).
 - **Push tokens**, so it can send alerts to your watch. Apple issues these, and they identify only
   the app on your device.

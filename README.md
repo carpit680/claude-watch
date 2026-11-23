@@ -39,44 +39,34 @@ Apple Watch app ──HTTPS──▶ relay (Cloudflare Worker) ◀──WebSocke
 ## Requirements
 
 - A Mac with [Claude Code](https://claude.com/claude-code) (the desktop app or the CLI) and
-  Node 22 or later.
+  Node 22 or later (`brew install node`).
 - An Apple Watch on watchOS 26 or later.
 - Until the app is on the App Store, you also need Xcode 26+ and an Apple Developer account to
   install it (see [Building the app yourself](#building-the-app-yourself)).
 
 ## Setting it up
 
-**Using Claude Code?** Open this folder in Claude Code and say *"set this up for me"*. The steps
-for agents are in [AGENTS.md](AGENTS.md).
+**Website with screenshots: https://carpit680.github.io/claude-watch/**
 
-By hand, from the repository folder:
-
-1. **Install the bridge.** It runs at login and restarts if it stops.
+1. Install **Wrist Bridge** on your Apple Watch from the App Store, and open it.
+2. On your Mac:
 
    ```bash
-   bridge/install-agents.sh
+   npx wrist-bridge setup
    ```
 
-2. **Sign it in to Claude** (once). The desktop app's sign-in isn't shared with the command line.
+   It installs the bridge to start at login, and signs it in to Claude if needed. Then it shows a
+   6-digit code.
+3. On the watch, tap **Pair with your Mac** and enter the code. When the watch and Mac show the
+   same check number, type `y` on the Mac.
 
-   ```bash
-   claude-watch login
-   ```
+Optionally, add the **Sessions** or **Usage** complication to a watch face.
 
-3. **Pair your watch.** Run this, then on the watch tap **Pair with your Mac**, enter the 6-digit
-   code, and check that both show the same check number before typing `y`.
+Later: `wrist-bridge status`, `wrist-bridge pair`, `wrist-bridge unpair`, and
+`wrist-bridge uninstall`.
 
-   ```bash
-   claude-watch pair
-   ```
-
-4. **Add the complications** (optional). Long-press your watch face, tap Edit, and choose
-   **Claude sessions** or **Claude usage** for a slot.
-
-Allow notifications when the app asks. Alerts then arrive through the relay.
-
-`claude-watch unpair` forgets paired watches. `bridge/install-agents.sh uninstall` removes the
-bridge.
+**Using Claude Code?** Open this folder in Claude Code and say *"set this up for me"*.
+[AGENTS.md](AGENTS.md) has the steps for agents.
 
 ## Using it
 
@@ -144,11 +134,11 @@ Environment variables for the bridge. Set them in the `EnvironmentVariables` of
 | `BRIDGE_LIVE_MODE` | `relay` | `copy` answers sessions open on the Mac from a fork instead |
 | `BRIDGE_DONE_MIN_SECONDS` | `45` | Shortest turn at the Mac that gets a "done" alert |
 | `BRIDGE_KEEP_AWAKE` | on | `0` lets the Mac sleep while plugged in |
-| `BRIDGE_RELAY` | the shared relay | Relay used by `claude-watch pair` |
+| `BRIDGE_RELAY` | the shared relay | Relay used by `wrist-bridge pair` |
 | `TUNNEL_NAME` | `claude-watch` | Cloudflare tunnel for a direct connection, read by `install-agents.sh` |
 | `CLAUDE_BIN` | found automatically | Path to the `claude` binary |
 
-After editing `bridge/server.mjs`, run `bridge/install-agents.sh` again to restart the bridge.
+After editing `bridge/server.mjs`, run `bridge/install-agents.sh` to install and restart your copy.
 
 ## Security and privacy
 
@@ -158,7 +148,7 @@ A paired watch can run Claude on your Mac, so treat it like remote access. In sh
   code *and* your confirmation of matching check numbers, so the relay can't swap the keys.
 - **Alert text passes through the relay unencrypted**: the session title and question, or the
   start of the last reply. Apple's push service needs readable alert text.
-- `claude-watch unpair` cuts a watch off at once.
+- `wrist-bridge unpair` cuts a watch off at once.
 
 More in [SECURITY.md](SECURITY.md).
 
@@ -166,9 +156,9 @@ More in [SECURITY.md](SECURITY.md).
 
 | Symptom | Likely cause |
 | --- | --- |
-| "Your Mac isn't connected" | The Mac is asleep (on battery, or the lid is closed), or the bridge isn't running. Check `~/.claude-watch/logs/bridge.log` for `relay: connected`. |
-| "Bridge is not signed in" | Run `claude-watch login`. |
-| "That code isn't valid" | Codes work once, for 10 minutes. Run `claude-watch pair` again. |
+| "Your Mac isn't connected" | The Mac is asleep (on battery, or the lid is closed), or the bridge isn't running. Run `wrist-bridge status`. |
+| "Bridge is not signed in" | Run `wrist-bridge login`. |
+| "That code isn't valid" | Codes work once, for 10 minutes. Run `wrist-bridge pair` again. |
 | "no longer paired" | The Mac unpaired the watch. Pair again. |
 | No alerts | Allow notifications for the app on the watch (Settings → Notifications), then reopen it so it signs up again. |
 | Xcode "No Accounts" or a profile error | Sign in under Xcode → Settings → Apple Accounts, quit and reopen Xcode, then build again. |

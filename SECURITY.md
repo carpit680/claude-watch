@@ -8,7 +8,7 @@ your Mac.
 - **The bridge accepts no connections from the internet.** It listens only on `127.0.0.1` and
   connects *out* to the relay.
 - **Pairing needs your Mac and your confirmation.**
-  - `claude-watch pair` shows a 6-digit code that works once, for 10 minutes. The relay limits
+  - `wrist-bridge pair` shows a 6-digit code that works once, for 10 minutes. The relay limits
     guesses per address.
   - The watch and Mac each show a check number derived from both their public keys, and the watch
     is let in only after you confirm on the Mac that the numbers match. A relay, or anyone else,
@@ -40,7 +40,7 @@ Unpairing deletes it.
 
 ## If something leaks
 
-- Run `claude-watch unpair` on the Mac to cut off every paired watch, then pair again.
+- Run `wrist-bridge unpair` on the Mac to cut off every paired watch, then pair again.
 - For a direct connection: use **New pairing token** in the watch app's Settings, or delete
   `~/.claude-watch/token` and run `bridge/install-agents.sh`.
 

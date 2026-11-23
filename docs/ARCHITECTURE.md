@@ -32,7 +32,7 @@ State on the Mac, all in `~/.claude-watch/` (mode 0700):
 ```
 watch                         relay                              Mac (bridge)
   │                             │◀──── WebSocket, hello(secret) ────│
-  │                             │◀── POST pairing {pk_mac} ─────────│  claude-watch pair
+  │                             │◀── POST pairing {pk_mac} ─────────│  wrist-bridge pair
   │                             │──── code 123 456 ────────────────▶│  shows the code
   │── POST join {code, pk_w} ──▶│                                   │
   │◀── watchId, secret, pk_mac ─│──── joined {pk_w} ───────────────▶│

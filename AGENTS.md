@@ -14,30 +14,29 @@ table before asking the user.
 node --version          # 22 or later (the bridge uses Node's built-in WebSocket)
 ```
 
-## 1. Install the bridge
+## 1. Install the bridge and sign it in (user, briefly)
+
+Run this in a terminal the user can see:
 
 ```bash
-bridge/install-agents.sh
+npx wrist-bridge setup
 ```
 
-It prints the command to use for the next steps: `claude-watch`, or a full path if no folder on
-the PATH was writable. Check that it's running:
+It installs the bridge to start at login, and then:
+
+- If the bridge isn't signed in to Claude, it opens a browser sign-in **(user)**.
+- Then it shows a pairing code. If the watch app isn't installed yet, stop it with Ctrl-C, do
+  step 3, and run `wrist-bridge pair` afterwards.
+
+From a clone of the repository, `bridge/install-agents.sh` installs that copy instead. Check:
 
 ```bash
-grep "relay\|listening" ~/.claude-watch/logs/bridge.log | tail -3
+wrist-bridge status    # bridge running, relay connected, signed in, paired
 ```
 
-## 2. Sign the bridge in to Claude (user)
+## 2. Get the app on the watch
 
-```bash
-claude-watch login
-```
-
-This opens a browser sign-in. Run it in a terminal the user can see, and wait for them to finish.
-
-## 3. Get the app on the watch
-
-If the app is installed from the App Store or TestFlight, skip to step 4. Otherwise build it:
+If the app is installed from the App Store (search for Wrist Bridge), skip to step 3. Otherwise build it:
 
 - Find the Apple team ID yourself where you can: with Xcode signed in,
   `security find-identity -v -p codesigning` shows `Apple Development: … (TEAMID)`. Otherwise
@@ -74,9 +73,9 @@ Notes:
 - A build with the user's own bundle ID gets no alerts from the shared relay. Tell them; the fix
   is their own relay ([relay/README.md](relay/README.md)).
 
-## 4. Pair (user and you)
+## 3. Pair (user and you)
 
-Start `claude-watch pair` in a terminal the user can see. It prints a 6-digit code. Tell the user:
+Start `wrist-bridge pair` in a terminal the user can see. It prints a 6-digit code. Tell the user:
 
 1. On the watch, open the app, tap **Pair with your Mac**, and enter the code.
 2. The watch then shows a check number. If the Mac asks about the same number, type `y` in the
@@ -90,7 +89,7 @@ cat ~/.claude-watch/pairings.json   # one entry per paired watch
 
 The app asks to send notifications on first launch **(user taps Allow)**.
 
-## 5. Complications (user)
+## 4. Complications (user)
 
 Ask the user to edit their watch face and add **Claude sessions** and/or **Claude usage**.
 

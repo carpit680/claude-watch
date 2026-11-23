@@ -35,7 +35,7 @@ echo <your prefix>.watchkitapp         | npx wrangler secret put APNS_TOPIC
 
 **Use it.**
 
-- **Mac:** `claude-watch pair --relay https://your-relay`. The bridge remembers the address.
+- **Mac:** `wrist-bridge pair --relay https://your-relay`. The bridge remembers the address.
 - **Watch, by build setting:** set `RELAY_HOST = your-relay-host` in `ClaudeWatch/Local.xcconfig`
   (`configure --relay your-relay-host` does this), then rebuild.
 - **Watch, by hand:** enter the address under the watch app's Settings.
