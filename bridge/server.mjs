@@ -788,7 +788,10 @@ function checkNumber(macPublic, watchPublic) {
   return `${n.slice(0, 3)} ${n.slice(3)}`;
 }
 
-const relay = { socket: null, ready: false, backoff: 1000, keys: new Map() };
+const relay = { socket: null, ready: false, backoff: 1000, keys: new Map(), heardAt: 0 };
+// A socket that never opens, or one that went quiet (say, after the Mac slept or changed
+// networks), may never fire `close` on its own. After this long it is dropped and redialled.
+const RELAY_SILENCE_MS = 45 * 1000;
 
 function keyFor(cfg, watchId) {
   const pairing = loadJson(PAIRINGS_FILE, {})[watchId];
@@ -805,10 +808,15 @@ function connectRelay() {
   if (!cfg || relay.socket || typeof WebSocket === 'undefined') return;
   const ws = new WebSocket(`${cfg.url.replace(/^http/, 'ws')}/v1/macs/${cfg.macId}/connect`);
   relay.socket = ws;
+  relay.heardAt = Date.now();
   ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', secret: cfg.macSecret }));
-  ws.onmessage = (event) => onRelayMessage(cfg, ws, event.data).catch((err) => console.log(`relay: ${err.message}`));
+  ws.onmessage = (event) => {
+    relay.heardAt = Date.now();
+    onRelayMessage(cfg, ws, event.data).catch((err) => console.log(`relay: ${err.message}`));
+  };
   ws.onerror = () => {};
   ws.onclose = (event) => {
+    if (relay.socket !== ws) return; // already given up on by the watchdog
     if (relay.ready) console.log(`relay: disconnected (${event.code})`);
     relay.socket = null;
     relay.ready = false;
@@ -1483,6 +1491,13 @@ if (command === 'help' || command === '--help' || command === '-h') {
   // The relay, once `pair` has set it up; also keeps the connection from idling out.
   connectRelay();
   setInterval(() => {
+    if (relay.socket && Date.now() - relay.heardAt > RELAY_SILENCE_MS) {
+      const stale = relay.socket;
+      if (relay.ready) console.log('relay: no reply, reconnecting');
+      relay.socket = null;
+      relay.ready = false;
+      try { stale.close(); } catch {}
+    }
     connectRelay();
     if (relay.ready) relay.socket.send('ping');
   }, 15 * 1000);
