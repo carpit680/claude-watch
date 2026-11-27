@@ -1,15 +1,36 @@
 {
   "name": "wrist-bridge",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Use the Claude Code sessions on your Mac from your Apple Watch: the Mac companion for the Wrist Bridge app.",
   "type": "module",
-  "bin": { "wrist-bridge": "cli.mjs" },
-  "files": ["cli.mjs", "server.mjs", "README.md", "LICENSE"],
-  "engines": { "node": ">=22" },
-  "os": ["darwin"],
-  "keywords": ["claude-code", "apple-watch", "watchos", "bridge", "remote"],
+  "bin": {
+    "wrist-bridge": "cli.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "server.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "darwin"
+  ],
+  "keywords": [
+    "claude-code",
+    "apple-watch",
+    "watchos",
+    "bridge",
+    "remote"
+  ],
   "homepage": "https://carpit680.github.io/claude-watch/",
-  "repository": { "type": "git", "url": "git+https://github.com/carpit680/claude-watch.git", "directory": "bridge" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/carpit680/claude-watch.git",
+    "directory": "bridge"
+  },
   "bugs": "https://github.com/carpit680/claude-watch/issues",
   "license": "MIT"
 }
